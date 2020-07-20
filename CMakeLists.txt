@@ -48,7 +48,7 @@ if (HERA_BINARYEN)
     include(ProjectBinaryen)
 endif()
 
-option(HERA_WABT "Build with wabt" ON)
+option(HERA_WABT "Build with wabt" OFF)
 if (HERA_WABT)
     include(ProjectWabt)
 endif()
@@ -58,7 +58,12 @@ if (HERA_WAVM)
     include(ProjectWAVM)
 endif()
 
-if (NOT (HERA_BINARYEN OR HERA_WABT OR HERA_WAVM))
+option(HERA_WASMER "Build with wasmer" ON)
+if (HERA_WASMER)
+    include(ProjectWasmer)
+endif()
+
+if (NOT (HERA_BINARYEN OR HERA_WABT OR HERA_WAVM OR HERA_WASMER))
     message(FATAL_ERROR "At least one one engine must be enabled.")
 endif()
 

@@ -6,7 +6,7 @@ find_package(intx CONFIG REQUIRED)
 set(hera_include_dir ${PROJECT_SOURCE_DIR}/include)
 get_filename_component(evmc_include_dir .. ABSOLUTE)
 
-add_library(hera
+add_library(hera STATIC
     debugging.h
     ${hera_include_dir}/hera/hera.h
     eei.cpp
@@ -26,6 +26,10 @@ endif()
 
 if(HERA_WAVM)
   target_sources(hera PRIVATE wavm.cpp wavm.h)
+endif()
+
+if(HERA_WASMER)
+  target_sources(hera PRIVATE wasmer.cpp wasmer.h)
 endif()
 
 option(HERA_DEBUGGING "Display debugging messages during execution." ON)
@@ -58,6 +62,11 @@ endif()
 if(HERA_WAVM)
     target_compile_definitions(hera PRIVATE HERA_WAVM=1)
     target_link_libraries(hera PRIVATE wavm::wavm)
+endif()
+
+if(HERA_WASMER)
+    target_compile_definitions(hera PRIVATE HERA_WASMER=1)
+    target_link_libraries(hera PRIVATE WASMER::runtim)
 endif()
 
 install(TARGETS hera EXPORT heraTargets
