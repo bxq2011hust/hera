@@ -692,6 +692,7 @@ void WasmEngine::collectBenchmarkingData()
   {
     // NOTE: the source bound check is not needed as the caller already ensures it
     ensureCondition((srcOffset + length) >= srcOffset, InvalidMemoryAccess, "Out of bounds (source) memory copy.");
+    HERA_DEBUG << "wasmer memory length is "<<memorySize()<< ", srcOffset is "<<srcOffset<<", length is "<<length<<"\n";
     ensureCondition(memorySize() >= (srcOffset + length), InvalidMemoryAccess, "Out of bounds (source) memory copy.");
 
     if (!length)
