@@ -41,11 +41,14 @@ namespace hera
         void memorySet(size_t offset, uint8_t value) override
         {
             auto data = wasmer_memory_data(m_wasmMemory);
+            ensureCondition(data != NULL, InvalidMemoryAccess, string("memorySet failed"));
             data[offset] = value;
         }
         uint8_t memoryGet(size_t offset) override
         {
+            ensureCondition(memorySize() >= offset, InvalidMemoryAccess, "Memory is shorter than requested segment");
             auto data = wasmer_memory_data(m_wasmMemory);
+            ensureCondition(data != NULL, InvalidMemoryAccess, string("memoryGet failed"));
             return data[offset];
         }
         uint8_t *memoryPointer(size_t offset, size_t length) override
@@ -209,6 +212,25 @@ namespace hera
             auto interface = getInterfaceFromVontext(ctx);
             interface->eeiStorageLoad(pathOffset, resultOffset);
         }
+        void beiSetStorage(wasmer_instance_context_t *ctx, uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength)
+        { // TODO: implement real BEI
+            (void)keyLength;
+            (void)valueLength;
+            auto interface = getInterfaceFromVontext(ctx);
+            interface->eeiStorageStore(keyOffset, valueOffset);
+        }
+        uint32_t beiGetStorage(wasmer_instance_context_t *ctx, uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset)
+        { // TODO: implement real BEI
+            auto interface = getInterfaceFromVontext(ctx);
+            interface->eeiStorageLoad(keyOffset, valueOffset);
+            (void)keyLength;
+            return 32;
+        }
+        void beiGetCallData(wasmer_instance_context_t *ctx, uint32_t resultOffset)
+        {
+            auto interface = getInterfaceFromVontext(ctx);
+            interface->eeiCallDataCopy(resultOffset, 0, interface->eeiGetCallDataSize());
+        }
         void eeiFinish(wasmer_instance_context_t *ctx, uint32_t offset, uint32_t size)
         {
             auto interface = getInterfaceFromVontext(ctx);
@@ -242,11 +264,11 @@ namespace hera
 #if HERA_DEBUGGING
         void print32(wasmer_instance_context_t *, uint32_t value)
         {
-            HERA_DEBUG<< "DEBUG print32: " << value << " " << hex << "0x" << value << dec << endl;
+            HERA_DEBUG << "DEBUG print32: " << value << " " << hex << "0x" << value << dec << endl;
         }
         void print64(wasmer_instance_context_t *, uint64_t value)
         {
-             HERA_DEBUG<< "DEBUG print64: " << value << " " << hex << "0x" << value << dec << endl;
+            HERA_DEBUG << "DEBUG print64: " << value << " " << hex << "0x" << value << dec << endl;
         }
         void printMem(wasmer_instance_context_t *ctx, uint32_t offset, uint32_t size)
         {
@@ -272,88 +294,61 @@ namespace hera
         shared_ptr<vector<wasmer_import_t>> initImportes()
         {
             wasmer_byte_array ethModule = getNameArray("ethereum");
-            shared_ptr<vector<wasmer_import_t>> imports(
-                new vector<wasmer_import_t>{
-                    {ethModule, getNameArray("useGas"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiUseGas, i64, 1, NULL, 0)},
-                    {ethModule, getNameArray("getGasLeft"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetGasLeft, NULL, 0, i64, 1)},
-                    {ethModule, getNameArray("getAddress"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetAddress, i32, 1, NULL, 0)},
-                    {ethModule, getNameArray("getExternalBalance"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetExternalBalance, i32_2, 2, NULL, 0)},
-                    {ethModule, getNameArray("getBlockHash"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetBlockHash, i64_i32, 2, i32, 1)},
-                    {ethModule, getNameArray("getCallDataSize"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetCallDataSize, NULL, 0, i32, 1)},
-                    {ethModule, getNameArray("callDataCopy"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiCallDataCopy, i32_3, 3, i32, 1)},
-                    {ethModule, getNameArray("getCaller"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetCaller, i32, 1, NULL, 0)},
-                    {ethModule, getNameArray("getCallValue"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetCallValue, i32, 1, NULL, 0)},
-                    {ethModule, getNameArray("codeCopy"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiCodeCopy, i32_3, 3, NULL, 0)},
-                    {ethModule, getNameArray("getCodeSize"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetCodeSize, NULL, 0, i32, 1)},
-                    {ethModule, getNameArray("externalCodeCopy"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiExternalCodeCopy, i32_4, 4, NULL, 0)},
-                    {ethModule, getNameArray("getExternalCodeSize"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetExternalCodeSize, i32, 1, i32, 1)},
-                    {ethModule, getNameArray("getBlockCoinbase"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetBlockCoinbase, i32, 1, NULL, 0)},
-                    {ethModule, getNameArray("getBlockDifficulty"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetBlockDifficulty, i32, 1, NULL, 0)},
-                    {ethModule, getNameArray("getBlockGasLimit"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetBlockGasLimit, NULL, 0, i64, 1)},
-                    {ethModule, getNameArray("getTxGasPrice"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetTxGasPrice, i32, 1, NULL, 0)},
-                    {ethModule, getNameArray("log"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiLog, i32_7, 7, NULL, 0)},
-                    {ethModule, getNameArray("getBlockNumber"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetBlockNumber, NULL, 0, i64, 1)},
-                    {ethModule, getNameArray("getBlockTimestamp"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetBlockTimestamp, NULL, 0, i64, 1)},
-                    {ethModule, getNameArray("getTxOrigin"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetTxOrigin, i32, 1, NULL, 0)},
-                    {ethModule, getNameArray("storageStore"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiStorageStore, i32_2, 2, NULL, 0)},
-                    {ethModule, getNameArray("storageLoad"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiStorageLoad, i32_2, 2, NULL, 0)},
-                    {ethModule, getNameArray("finish"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiFinish, i32_2, 2, NULL, 0)},
-                    {ethModule, getNameArray("revert"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiRevert, i32_2, 2, NULL, 0)},
-                    {ethModule, getNameArray("getReturnDataSize"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiGetReturnDataSize, NULL, 0, i32, 1)},
-                    {ethModule, getNameArray("returnDataCopy"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiReturnDataCopy, i32_3, 3, NULL, 0)},
-                    {ethModule, getNameArray("create"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiCreate, i32_4, 4, NULL, 0)},
-                    {ethModule, getNameArray("selfDestruct"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))eeiSelfDestruct, i32, 1, NULL, 0)},
-                },
-                [](auto p) {
-                    for (size_t i = 0; i < p->size(); ++i)
-                    {
-                        wasmer_import_func_destroy((wasmer_import_func_t *)p->at(i).value.func);
-                    }
-                    delete p;
-                });
+            shared_ptr<vector<wasmer_import_t>> imports(new vector<wasmer_import_t>(), [](auto p) {
+                for (size_t i = 0; i < p->size(); ++i)
+                {
+                    wasmer_import_func_destroy((wasmer_import_func_t *)p->at(i).value.func);
+                }
+                delete p;
+            });
+            imports->reserve(35);
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("useGas"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiUseGas, i64, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getGasLeft"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetGasLeft, NULL, 0, i64, 1)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getAddress"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetAddress, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getExternalBalance"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetExternalBalance, i32_2, 2, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockHash"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockHash, i64_i32, 2, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getCallDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCallDataSize, NULL, 0, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("callDataCopy"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiCallDataCopy, i32_3, 3, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getCaller"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCaller, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getCallValue"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCallValue, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("codeCopy"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiCodeCopy, i32_3, 3, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getCodeSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCodeSize, NULL, 0, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("externalCodeCopy"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiExternalCodeCopy, i32_4, 4, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getExternalCodeSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetExternalCodeSize, i32, 1, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockCoinbase"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockCoinbase, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockDifficulty"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockDifficulty, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockGasLimit"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockGasLimit, NULL, 0, i64, 1)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getTxGasPrice"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetTxGasPrice, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("log"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiLog, i32_7, 7, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockNumber"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockNumber, NULL, 0, i64, 1)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockTimestamp"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockTimestamp, NULL, 0, i64, 1)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getTxOrigin"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetTxOrigin, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("storageStore"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiStorageStore, i32_2, 2, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("storageLoad"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiStorageLoad, i32_2, 2, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("finish"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiFinish, i32_2, 2, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("revert"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiRevert, i32_2, 2, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getReturnDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetReturnDataSize, NULL, 0, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("returnDataCopy"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiReturnDataCopy, i32_3, 3, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("create"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiCreate, i32_4, 4, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("selfDestruct"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiSelfDestruct, i32, 1, NULL, 0)}});
+
+            wasmer_byte_array bcosModule = getNameArray("bcos");
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("finish"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiFinish, i32_2, 2, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCallDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCallDataSize, NULL, 0, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCallData"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetCallData, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("setStorage"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiSetStorage, i32_4, 4, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getStorage"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetStorage, i32_3, 3, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCaller"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCaller, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("revert"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiRevert, i32_2, 2, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getTxOrigin"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetTxOrigin, i32, 1, NULL, 0)}});
 #if HERA_DEBUGGING
             wasmer_byte_array debugModule = getNameArray("debug");
-            imports->push_back(wasmer_import_t{debugModule, getNameArray("print32"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))print32, i32, 1, NULL, 0)});
-            imports->push_back(wasmer_import_t{debugModule, getNameArray("print64"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))print64, i64, 1, NULL, 0)});
-            imports->push_back(wasmer_import_t{debugModule, getNameArray("printMem"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))printMem, i32_2, 2, NULL, 0)});
-            imports->push_back(wasmer_import_t{debugModule, getNameArray("printMemHex"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))printMemHex, i32_2, 2, NULL, 0)});
-            imports->push_back(wasmer_import_t{debugModule, getNameArray("printStorage"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))printStorage, i32, 1, NULL, 0)});
-            imports->push_back(wasmer_import_t{debugModule, getNameArray("printStorageHex"), wasmer_import_export_kind::WASM_FUNCTION,
-                     .value.func = wasmer_import_func_new((void (*)(void *))printStorageHex, i32, 1, NULL, 0)});
+            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("print32"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))print32, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("print64"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))print64, i64, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("printMem"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))printMem, i32_2, 2, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("printMemHex"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))printMemHex, i32_2, 2, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("printStorage"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))printStorage, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("printStorageHex"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))printStorageHex, i32, 1, NULL, 0)}});
 #endif
             return imports;
         }
@@ -362,6 +357,7 @@ namespace hera
                                           "getCallValue", "codeCopy", "getCodeSize", "externalCodeCopy", "getExternalCodeSize", "getBlockCoinbase",
                                           "getBlockDifficulty", "getBlockGasLimit", "getTxGasPrice", "log", "getBlockNumber", "getBlockTimestamp", "getTxOrigin", "storageStore",
                                           "storageLoad", "finish", "revert", "getReturnDataSize", "returnDataCopy", "call", "callCode", "callDelegate", "callStatic", "create", "selfDestruct"};
+    static const set<string> beiFunctions{"finish", "getCallDataSize", "getCallData", "setStorage", "getStorage", "getCaller", "revert", "getTxOrigin"};
     void WasmerEngine::verifyContract(bytes_view code)
     {
         auto codeData = new unsigned char[code.size()];
@@ -383,12 +379,17 @@ namespace hera
             { // multiple memories are not supported for wasmer 0.17.0
                 ensureCondition(wasmer_export_descriptor_kind(exportObj) == wasmer_import_export_kind::WASM_MEMORY, ContractValidationFailure, "\"memory\" is not pointing to memory.");
             }
-            else if (objectName == "main")
+            else if (objectName == "deploy" || objectName == "main")
             {
                 ensureCondition(wasmer_export_descriptor_kind(exportObj) == wasmer_import_export_kind::WASM_FUNCTION, ContractValidationFailure, "\"main\" is not pointing to function.");
             }
+            else if (objectName == "__data_end" || objectName == "__heap_base")
+            {
+                ensureCondition(wasmer_export_descriptor_kind(exportObj) == wasmer_import_export_kind::WASM_GLOBAL, ContractValidationFailure, "__data_end/__heap_base is not pointing to global.");
+            }
             else
             {
+                HERA_DEBUG << "Invalid export is " << objectName << "\n";
                 ensureCondition(false, ContractValidationFailure, "Invalid export is present.");
             }
         }
@@ -406,10 +407,10 @@ namespace hera
             if (moduleName == "debug")
                 continue;
 #endif
-            ensureCondition(moduleName == "ethereum", ContractValidationFailure, "Import from invalid namespace.");
+            ensureCondition(moduleName == "bcos" || moduleName == "ethereum", ContractValidationFailure, "Import from invalid namespace.");
             auto nameBytes = wasmer_import_descriptor_name(importObj);
             string objectName((char *)nameBytes.bytes, nameBytes.bytes_len);
-            ensureCondition(eeiFunctions.count(objectName), ContractValidationFailure, "Importing invalid EEI method.");
+            ensureCondition(beiFunctions.count(objectName) || eeiFunctions.count(objectName), ContractValidationFailure, "Importing invalid EEI method.");
             ensureCondition(wasmer_import_descriptor_kind(importObj) == wasmer_import_export_kind::WASM_FUNCTION, ContractValidationFailure, "Imported function type mismatch.");
         }
         wasmer_import_descriptors_destroy(imports);
@@ -428,7 +429,9 @@ namespace hera
         // Instantiate a WebAssembly Instance from Wasm bytes and imports
         wasmer_instance_t *instance = NULL;
         auto codeData = new unsigned char[code.size()];
+        //TODO: check if need free codeData
         memcpy(codeData, code.data(), code.size());
+        HERA_DEBUG << "Compile wasm code use wasmer...\n";
         wasmer_result_t compile_result =
             wasmer_instantiate(&instance,                                       // Our reference to our Wasm instance
                                codeData,                                        // The bytes of the WebAssembly modules
@@ -442,19 +445,55 @@ namespace hera
         // Assert the Wasm instantion completed
         wasmer_instance_context_data_set(instance, (void *)&interface);
         auto ctx = wasmer_instance_context_get(instance);
-        interface.setWasmMemory(wasmer_instance_context_memory(ctx, 0));
+        auto memory = wasmer_instance_context_memory(ctx, 0);
+        ensureCondition(memory != NULL, InvalidMemoryAccess, string("get memory from wasmer failed"));
+        HERA_DEBUG << "wasmer memory pages is " << wasmer_memory_length(memory) << "\n";
+        ensureCondition(wasmer_memory_length(memory) >= 1, InvalidMemoryAccess, string("wasmer memory pages must greater than 1"));
+
+        interface.setWasmMemory(memory);
         // Call the Wasm function
-        wasmer_result_t call_result = wasmer_instance_call(
-            instance, // Our Wasm Instance
-            "main",   // the name of the exported function we want to call on the guest Wasm module
-            NULL,     // Our array of parameters
-            0,        // The number of parameters
-            NULL,     // Our array of results
-            0         // The number of results
-        );
-        ensureCondition(call_result == wasmer_result_t::WASMER_OK, EndExecution, string("Call main failed, ") + getWasmerErrorString());
+        wasmer_result_t call_result;
+        wasmer_value_t results[] = {};
+        // Define our parameters (none) we are passing into the guest Wasm function call.
+        wasmer_value_t params[] = {};
+        const char *callName = "main";
+        if (msg.kind == EVMC_CREATE)
+        {
+            callName = "deploy";
+        }
+        try
+        {
+            HERA_DEBUG << "Executing contract with wasmer...\n";
+            call_result = wasmer_instance_call(
+                instance, // Our Wasm Instance
+                callName, // the name of the exported function we want to call on the guest Wasm module
+                params,   // Our array of parameters
+                0,        // The number of parameters
+                results,  // Our array of results
+                0         // The number of results
+            );
+        }
+        catch (EndExecution const &)
+        {
+            // This exception is ignored here because we consider it to be a success.
+            // It is only a clutch for POSIX style exit()
+        }
+        // TODO: check if we need process wasmer_result_t
+        // ensureCondition(call_result == wasmer_result_t::WASMER_OK, EndExecution, string("Call main failed, ") + getWasmerErrorString());
+        if (msg.kind == EVMC_CREATE)
+        {
+            result.returnValue = code;
+        }
+        //FIXME: debug log should delete before release
+        HERA_DEBUG << "Output size is " << result.returnValue.size() << ", ouput=";
+        for (size_t i = 0; i < result.returnValue.size(); ++i)
+        {
+            HERA_DEBUG << hex << result.returnValue[i];
+        }
+        HERA_DEBUG << " done\n";
 
         wasmer_instance_destroy(instance);
+        executionFinished();
         return result;
     };
 } // namespace hera
