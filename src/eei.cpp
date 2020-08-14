@@ -846,4 +846,35 @@ void WasmEngine::collectBenchmarkingData()
     }
     return ret;
   }
+
+  void EthereumInterface::beiSetStorage(uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength)
+  {
+      HERA_DEBUG << depthToString() << " beiSetStorage " << hex << keyOffset << " " << valueOffset << dec << "\n";
+
+      static_assert(
+        GasSchedule::storageStoreCreate >= GasSchedule::storageStoreChange,
+        "storageStoreChange costs more than storageStoreCreate"
+      );
+
+      // Charge this here as it is the minimum cost.
+      takeInterfaceGas(GasSchedule::storageStoreChange);
+
+      ensureCondition(!(m_msg.flags & EVMC_STATIC), StaticModeViolation, "storageStore");
+
+      const char * key = (const char *)memoryPointer(keyOffset,keyLength);
+      const char * value = (const char *)memoryPointer(valueOffset,valueLength);
+      m_host.set(m_msg.destination, key, (int32_t)keyLength, value, (int32_t)valueLength);
+  }
+
+  int32_t EthereumInterface::beiGetStorage(uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength)
+  {
+      HERA_DEBUG << depthToString() << " beiGetStorage " << hex << keyOffset << " " << valueOffset << dec << "\n";
+
+      takeInterfaceGas(GasSchedule::storageLoad);
+
+      const char * key = (const char *)memoryPointer(keyOffset,keyLength);
+      char * value = (char *)memoryPointer(valueOffset,valueLength);
+      return m_host.get(m_msg.destination, key, (int32_t)keyLength, value, (int32_t)valueLength);
+  }
+
 }

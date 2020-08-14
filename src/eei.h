@@ -163,6 +163,9 @@ protected:
   uint32_t eeiCreate(uint32_t valueOffset, uint32_t dataOffset, uint32_t length, uint32_t resultOffset);
   void eeiSelfDestruct(uint32_t addressOffset);
 
+  void beiSetStorage(uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength);
+  int32_t beiGetStorage(uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength);
+
 private:
   void eeiRevertOrFinish(bool revert, uint32_t offset, uint32_t size);
 

@@ -213,18 +213,15 @@ namespace hera
             interface->eeiStorageLoad(pathOffset, resultOffset);
         }
         void beiSetStorage(wasmer_instance_context_t *ctx, uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength)
-        { // TODO: implement real BEI
-            (void)keyLength;
-            (void)valueLength;
+        {
             auto interface = getInterfaceFromVontext(ctx);
-            interface->eeiStorageStore(keyOffset, valueOffset);
+            interface->beiSetStorage(keyOffset, keyLength,valueOffset,valueLength);
         }
-        uint32_t beiGetStorage(wasmer_instance_context_t *ctx, uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset)
-        { // TODO: implement real BEI
+        int32_t beiGetStorage(wasmer_instance_context_t *ctx, uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset)
+        {
             auto interface = getInterfaceFromVontext(ctx);
-            interface->eeiStorageLoad(keyOffset, valueOffset);
-            (void)keyLength;
-            return 32;
+            const int32_t maxLength = 19264;
+            return interface->beiGetStorage(keyOffset, keyLength, valueOffset, maxLength);
         }
         void beiGetCallData(wasmer_instance_context_t *ctx, uint32_t resultOffset)
         {
@@ -484,13 +481,17 @@ namespace hera
         {
             result.returnValue = code;
         }
-        //FIXME: debug log should delete before release
-        HERA_DEBUG << "Output size is " << result.returnValue.size() << ", ouput=";
-        for (size_t i = 0; i < result.returnValue.size(); ++i)
+        else
         {
-            HERA_DEBUG << hex << result.returnValue[i];
+            //FIXME: debug log should delete before release
+            HERA_DEBUG << "Output size is " << result.returnValue.size() << ", ouput=";
+            for (size_t i = 0; i < result.returnValue.size(); ++i)
+            {
+                HERA_DEBUG << hex << result.returnValue[i];
+            }
+            HERA_DEBUG << " done\n";
         }
-        HERA_DEBUG << " done\n";
+            HERA_DEBUG <<"error message "<< getWasmerErrorString()<<"\n";
 
         wasmer_instance_destroy(instance);
         executionFinished();
