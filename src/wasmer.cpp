@@ -85,7 +85,34 @@ namespace hera
             delete[] error_str;
             return error;
         }
+#if 0
+        // Function to create a wasmer memory instance, so we can import
+        // memory into a wasmer instance.
+        wasmer_memory_t *create_wasmer_memory()
+        {
+            // Create our initial size of the memory
+            wasmer_memory_t *memory = NULL;
+            // Create our maximum memory size.
+            // .has_some represents wether or not the memory has a maximum size
+            // .some is the value of the maxiumum size
+            wasmer_limit_option_t max = {true, 256};
+            // Create our memory descriptor, to set our minimum and maximum memory size
+            // .min is the minimum size of the memory
+            // .max is the maximuum size of the memory
+            wasmer_limits_t descriptor = {64, max};
 
+            // Create our memory instance, using our memory and descriptor,
+            wasmer_result_t memory_result = wasmer_memory_new(&memory, descriptor);
+            // Ensure the memory was instantiated successfully.
+            if (memory_result != wasmer_result_t::WASMER_OK)
+            {
+                ensureCondition(memory != NULL, InvalidMemoryAccess, string("get memory from wasmer failed") + getWasmerErrorString());
+            }
+
+            // Return the Wasmer Memory Instance
+            return memory;
+        }
+#endif
         wasmer_byte_array getNameArray(const char *name)
         {
             return wasmer_byte_array{(const uint8_t *)name, (uint32_t)strlen(name)};
@@ -215,7 +242,7 @@ namespace hera
         void beiSetStorage(wasmer_instance_context_t *ctx, uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength)
         {
             auto interface = getInterfaceFromVontext(ctx);
-            interface->beiSetStorage(keyOffset, keyLength,valueOffset,valueLength);
+            interface->beiSetStorage(keyOffset, keyLength, valueOffset, valueLength);
         }
         int32_t beiGetStorage(wasmer_instance_context_t *ctx, uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset)
         {
@@ -292,13 +319,25 @@ namespace hera
         {
             wasmer_byte_array ethModule = getNameArray("ethereum");
             shared_ptr<vector<wasmer_import_t>> imports(new vector<wasmer_import_t>(), [](auto p) {
+                // Destroy the instances we created for wasmer
+#if 0
+                wasmer_memory_destroy((wasmer_memory_t *)p->at(0).value.memory);
+                //for (size_t i = 1; i < p->size(); ++i)
+#endif
                 for (size_t i = 0; i < p->size(); ++i)
                 {
                     wasmer_import_func_destroy((wasmer_import_func_t *)p->at(i).value.func);
                 }
                 delete p;
             });
-            imports->reserve(35);
+
+            imports->reserve(36);
+#if 0
+            // import memory
+            wasmer_memory_t *memory = create_wasmer_memory();
+            imports->emplace_back(wasmer_import_t{getNameArray("env"), getNameArray("memory"), wasmer_import_export_kind::WASM_MEMORY, {NULL}});
+            imports->back().value.memory = memory;
+#endif
             imports->emplace_back(wasmer_import_t{ethModule, getNameArray("useGas"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiUseGas, i64, 1, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getGasLeft"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetGasLeft, NULL, 0, i64, 1)}});
             imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getAddress"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetAddress, i32, 1, NULL, 0)}});
@@ -404,6 +443,9 @@ namespace hera
             if (moduleName == "debug")
                 continue;
 #endif
+            //FIXME: this needs to be deleted
+            if (moduleName == "env")
+                continue;
             ensureCondition(moduleName == "bcos" || moduleName == "ethereum", ContractValidationFailure, "Import from invalid namespace.");
             auto nameBytes = wasmer_import_descriptor_name(importObj);
             string objectName((char *)nameBytes.bytes, nameBytes.bytes_len);
@@ -425,8 +467,8 @@ namespace hera
         auto imports = initImportes();
         // Instantiate a WebAssembly Instance from Wasm bytes and imports
         wasmer_instance_t *instance = NULL;
+        //TODO: check if need free codeData, for me it seems wasmer will free
         auto codeData = new unsigned char[code.size()];
-        //TODO: check if need free codeData
         memcpy(codeData, code.data(), code.size());
         HERA_DEBUG << "Compile wasm code use wasmer...\n";
         wasmer_result_t compile_result =
@@ -449,7 +491,7 @@ namespace hera
 
         interface.setWasmMemory(memory);
         // Call the Wasm function
-        wasmer_result_t call_result;
+        wasmer_result_t call_result = wasmer_result_t::WASMER_ERROR;
         wasmer_value_t results[] = {};
         // Define our parameters (none) we are passing into the guest Wasm function call.
         wasmer_value_t params[] = {};
@@ -491,7 +533,12 @@ namespace hera
             }
             HERA_DEBUG << " done\n";
         }
-            HERA_DEBUG <<"error message "<< getWasmerErrorString()<<"\n";
+        auto errorMessage = getWasmerErrorString();
+        if(call_result == wasmer_result_t::WASMER_OK && !errorMessage.empty())
+        {
+            result.isRevert = true;
+            HERA_DEBUG << "error message " << getWasmerErrorString() << "\n";
+        }
 
         wasmer_instance_destroy(instance);
         executionFinished();

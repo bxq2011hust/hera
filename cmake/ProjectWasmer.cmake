@@ -13,10 +13,11 @@ ExternalProject_Add(wasmer
         GIT_REPOSITORY https://github.com/wasmerio/wasmer.git
         GIT_TAG 63a2d8129c7ad5ca670d041859de45e01292dd12
         BUILD_IN_SOURCE 1
-        CONFIGURE_COMMAND COMMAND echo "[profile.release]\\nlto = false" >> Cargo.toml
+        CONFIGURE_COMMAND COMMAND git reset --hard COMMAND echo "[profile.release]\\nlto = false" >> Cargo.toml
         BUILD_COMMAND ${WASMER_BUILD_COMMAND}
         INSTALL_COMMAND ""
-        LOG_CONFIGURE 1
+        # must not log configure
+        LOG_CONFIGURE 0
         LOG_BUILD 1
         LOG_INSTALL 1
         BUILD_BYPRODUCTS <SOURCE_DIR>/target/release/libwasmer_runtime_c_api.a
