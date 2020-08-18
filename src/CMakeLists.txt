@@ -30,6 +30,7 @@ endif()
 
 if(HERA_WASMER)
   target_sources(hera PRIVATE wasmer.cpp wasmer.h)
+  target_compile_options(hera PRIVATE -Wno-error)
 endif()
 
 option(HERA_DEBUGGING "Display debugging messages during execution." ON)

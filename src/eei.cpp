@@ -438,7 +438,12 @@ void WasmEngine::collectBenchmarkingData()
 
       m_result.isRevert = revert;
 
-      throw EndExecution{};
+      //throw EndExecution{};
+      //FIXME: throw exception will crash host
+      int value_one = 24;
+      int value_two = 0;
+      int error = value_one / value_two;
+      (void)error;
   }
 
   uint32_t EthereumInterface::eeiGetReturnDataSize()
