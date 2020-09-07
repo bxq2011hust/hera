@@ -377,6 +377,7 @@ namespace hera
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCaller"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCaller, i32, 1, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("revert"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiRevert, i32_2, 2, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getTxOrigin"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetTxOrigin, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("log"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiLog, i32_7, 7, NULL, 0)}});
 #if HERA_DEBUGGING
             wasmer_byte_array debugModule = getNameArray("debug");
             imports->emplace_back(wasmer_import_t{debugModule, getNameArray("print32"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))print32, i32, 1, NULL, 0)}});
@@ -393,7 +394,7 @@ namespace hera
                                           "getCallValue", "codeCopy", "getCodeSize", "externalCodeCopy", "getExternalCodeSize", "getBlockCoinbase",
                                           "getBlockDifficulty", "getBlockGasLimit", "getTxGasPrice", "log", "getBlockNumber", "getBlockTimestamp", "getTxOrigin", "storageStore",
                                           "storageLoad", "finish", "revert", "getReturnDataSize", "returnDataCopy", "call", "callCode", "callDelegate", "callStatic", "create", "selfDestruct"};
-    static const set<string> beiFunctions{"finish", "getCallDataSize", "getCallData", "setStorage", "getStorage", "getCaller", "revert", "getTxOrigin"};
+    static const set<string> beiFunctions{"finish", "getCallDataSize", "getCallData", "setStorage", "getStorage", "getCaller", "revert", "getTxOrigin", "log"};
     void WasmerEngine::verifyContract(bytes_view code)
     {
         auto codeData = new unsigned char[code.size()];
