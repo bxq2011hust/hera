@@ -12,7 +12,7 @@
  */
 
 #include "wasmer.h"
-#include "runtime-c-api/wasmer.hh"
+#include "c-api/wasmer.hh"
 #include <cstdio>
 #include <vector>
 #include <memory>
@@ -319,7 +319,7 @@ namespace hera
         {
             wasmer_byte_array ethModule = getNameArray("ethereum");
             shared_ptr<vector<wasmer_import_t>> imports(new vector<wasmer_import_t>(), [](auto p) {
-                // Destroy the instances we created for wasmer
+            // Destroy the instances we created for wasmer
 #if 0
                 wasmer_memory_destroy((wasmer_memory_t *)p->at(0).value.memory);
                 //for (size_t i = 1; i < p->size(); ++i)
@@ -369,6 +369,7 @@ namespace hera
             imports->emplace_back(wasmer_import_t{ethModule, getNameArray("selfDestruct"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiSelfDestruct, i32, 1, NULL, 0)}});
 
             wasmer_byte_array bcosModule = getNameArray("bcos");
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("useGas"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiUseGas, i64, 1, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("finish"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiFinish, i32_2, 2, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCallDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCallDataSize, NULL, 0, i32, 1)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCallData"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetCallData, i32, 1, NULL, 0)}});
@@ -486,7 +487,7 @@ namespace hera
         wasmer_instance_context_data_set(instance, (void *)&interface);
         auto ctx = wasmer_instance_context_get(instance);
         auto memory = wasmer_instance_context_memory(ctx, 0);
-        ensureCondition(memory != NULL, InvalidMemoryAccess, string("get memory from wasmer failed"));
+        ensureCondition(memory != NULL, InvalidMemoryAccess, string("get memory from wasmer failed, ") + getWasmerErrorString());
         HERA_DEBUG << "wasmer memory pages is " << wasmer_memory_length(memory) << "\n";
         ensureCondition(wasmer_memory_length(memory) >= 1, InvalidMemoryAccess, string("wasmer memory pages must greater than 1"));
 
@@ -503,7 +504,7 @@ namespace hera
         }
         try
         {
-            HERA_DEBUG << "Executing contract with wasmer...\n";
+            HERA_DEBUG << "Executing contract " << callName << "...\n";
             call_result = wasmer_instance_call(
                 instance, // Our Wasm Instance
                 callName, // the name of the exported function we want to call on the guest Wasm module
@@ -535,7 +536,7 @@ namespace hera
             HERA_DEBUG << " done\n";
         }
         auto errorMessage = getWasmerErrorString();
-        if(call_result == wasmer_result_t::WASMER_OK && !errorMessage.empty())
+        if (call_result == wasmer_result_t::WASMER_OK && !errorMessage.empty())
         {
             result.isRevert = true;
             HERA_DEBUG << "error message " << getWasmerErrorString() << "\n";
