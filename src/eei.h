@@ -167,8 +167,11 @@ protected:
 
   void beiSetStorage(uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength);
   int32_t beiGetStorage(uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength);
-
+#if HERA_WASMER
+protected:
+#else
 private:
+#endif
   void eeiRevertOrFinish(bool revert, uint32_t offset, uint32_t size);
 
   // Helpers methods
@@ -176,7 +179,11 @@ private:
     return "[" + std::to_string(m_msg.depth) + "]";
   }
 
+#if HERA_WASMER
+  virtual
+#endif
   void takeGas(int64_t gas);
+
   void takeInterfaceGas(int64_t gas);
 
   void ensureSourceMemoryBounds(uint32_t offset, uint32_t length);
