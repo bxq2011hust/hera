@@ -421,6 +421,9 @@ evmc_result hera_execute(
   } catch (StaticModeViolation const& e) {
     ret.status_code = EVMC_STATIC_MODE_VIOLATION;
     HERA_DEBUG << e.what() << "\n";
+  } catch (Unreachable const& e) {
+    ret.status_code = EVMC_WASM_UNREACHABLE_INSTRUCTION;
+    HERA_DEBUG << "Unreachable: " << e.what() << "\n";
   } catch (InternalErrorException const& e) {
     ret.status_code = EVMC_INTERNAL_ERROR;
     HERA_DEBUG << "InternalError: " << e.what() << "\n";

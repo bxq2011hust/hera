@@ -30,6 +30,7 @@ using namespace std;
         wasmer_trap(ctx, msg);          \
     }
 const char *OUT_OF_GAS = "Out of gas.";
+const char *UNREACHABLE = "unreachable";
 namespace hera
 {
     class WasmerEthereumInterface : public EthereumInterface
@@ -615,7 +616,13 @@ namespace hera
             //TODO: throw specific exception according to error message
             if (errorMessage.find(OUT_OF_GAS) != std::string::npos)
             {
+                HERA_DEBUG << OUT_OF_GAS << "\n";
                 throw hera::OutOfGas(OUT_OF_GAS);
+            }
+            else if (errorMessage.find(UNREACHABLE) != std::string::npos)
+            {
+                HERA_DEBUG << UNREACHABLE << "\n";
+                throw hera::Unreachable(UNREACHABLE);
             }
             else
             {

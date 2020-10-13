@@ -6,14 +6,16 @@ include(ExternalProject)
 include(GNUInstallDirs)
 
 # TODO: if find LLVM 8.0+ use make capi-llvm to get better permformance
-set(WASMER_BUILD_COMMAND make build-capi)
+set(WASMER_BUILD_COMMAND cargo clean COMMAND cargo update COMMAND make build-capi)
 ExternalProject_Add(wasmer
         PREFIX ${CMAKE_SOURCE_DIR}/deps
         DOWNLOAD_NO_PROGRESS 1
         GIT_REPOSITORY https://github.com/wasmerio/wasmer.git
-        GIT_TAG 69a8421ac40ba33360fc3cfac19046556f0ad220
+        GIT_SHALLOW true
+        GIT_TAG 1089a4dc208ec41726aa021d882b326b6f765d18
         BUILD_IN_SOURCE 1
-        CONFIGURE_COMMAND COMMAND git reset --hard COMMAND echo "[profile.release]\\nlto = false" >> Cargo.toml COMMAND git add . COMMAND git commit -m "add nlto = false"
+        UPDATE_COMMAND COMMAND git reset --hard
+        CONFIGURE_COMMAND COMMAND git reset --hard COMMAND echo "[profile.release]" >> Cargo.toml COMMAND echo "lto=false" >> Cargo.toml
         BUILD_COMMAND ${WASMER_BUILD_COMMAND}
         INSTALL_COMMAND ""
         # must not log configure
