@@ -47,6 +47,9 @@ class ContractValidationFailure : public HeraException {
 class InvalidMemoryAccess : public HeraException {
   using HeraException::HeraException;
 };
+class Unreachable : public HeraException {
+  using HeraException::HeraException;
+};
 class EndExecution : public HeraException {
   using HeraException::HeraException;
 };
