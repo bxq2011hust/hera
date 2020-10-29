@@ -30,6 +30,7 @@ using namespace std;
         wasmer_trap(ctx, msg);          \
     }
 const char *OUT_OF_GAS = "Out of gas.";
+const char *REVERT = "revert";
 const char *UNREACHABLE = "unreachable";
 namespace hera
 {
@@ -53,7 +54,7 @@ namespace hera
             hostEnsure(gas <= m_result.gasLeft, m_wasmContext, OUT_OF_GAS);
             m_result.gasLeft -= gas;
         }
-        void beiRevertOrFinish(bool revert, uint32_t offset, uint32_t size)
+        void beiRevertOrFinish(const wasmer_instance_context_t *_wasmContext, bool revert, uint32_t offset, uint32_t size)
         {
             HERA_DEBUG << (revert ? "revert " : "finish ") << hex << offset << " " << size << dec << "\n";
 
@@ -64,7 +65,8 @@ namespace hera
             m_result.isRevert = revert;
             if (revert)
             {
-                wasmer_trap(m_wasmContext, "revert");
+                wasmer_trap(_wasmContext, "revert");
+                return;
             }
             //throw EndExecution{};
             //FIXME: throw exception will crash host
@@ -313,12 +315,17 @@ namespace hera
         void eeiFinish(wasmer_instance_context_t *ctx, uint32_t offset, uint32_t size)
         {
             auto interface = getInterfaceFromVontext(ctx);
-            interface->beiRevertOrFinish(false, offset, size);
+            interface->beiRevertOrFinish(ctx, false, offset, size);
         }
         void eeiRevert(wasmer_instance_context_t *ctx, uint32_t offset, uint32_t size)
         {
             auto interface = getInterfaceFromVontext(ctx);
-            interface->beiRevertOrFinish(true, offset, size);
+            interface->beiRevertOrFinish(ctx, true, offset, size);
+        }
+        void beiCall(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t dataOffset, uint32_t dataLength)
+        {
+            auto interface = getInterfaceFromVontext(ctx);
+            interface->eeiCall(EthereumInterface::EEICallKind::Call, interface->eeiGetGasLeft(), addressOffset, 0, dataOffset, dataLength);
         }
         uint32_t eeiGetReturnDataSize(wasmer_instance_context_t *ctx)
         {
@@ -330,6 +337,12 @@ namespace hera
         {
             auto interface = getInterfaceFromVontext(ctx);
             interface->eeiReturnDataCopy(dataOffset, offset, size);
+        }
+        void beiReturnDataCopy(
+            wasmer_instance_context_t *ctx, uint32_t dataOffset)
+        {
+            auto interface = getInterfaceFromVontext(ctx);
+            interface->eeiReturnDataCopy(dataOffset, 0, interface->eeiGetReturnDataSize());
         }
         uint32_t eeiCreate(wasmer_instance_context_t *ctx, uint32_t valueOffset, uint32_t dataOffset,
                            uint32_t length, uint32_t resultOffset)
@@ -440,8 +453,13 @@ namespace hera
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCaller"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCaller, i32, 1, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("revert"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiRevert, i32_2, 2, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getTxOrigin"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetTxOrigin, i32, 1, NULL, 0)}});
+
             imports->emplace_back(
                 wasmer_import_t{bcosModule, getNameArray("log"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiLog, i32_7, 7, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getReturnDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetReturnDataSize, NULL, 0, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getReturnData"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiReturnDataCopy, i32_3, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("call"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiCall, i32_3, 3, i32, 1)}});
+
 #if HERA_DEBUGGING
             wasmer_byte_array debugModule = getNameArray("debug");
             imports->emplace_back(wasmer_import_t{debugModule, getNameArray("print32"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))print32, i32, 1, NULL, 0)}});
@@ -462,7 +480,7 @@ namespace hera
                                           "getReturnDataSize", "returnDataCopy", "call", "callCode", "callDelegate", "callStatic",
                                           "create", "selfDestruct"};
     static const set<string> beiFunctions{"finish", "getCallDataSize", "getCallData", "setStorage",
-                                          "getStorage", "getCaller", "revert", "getTxOrigin", "log"};
+                                          "getStorage", "getCaller", "revert", "getTxOrigin", "log", "getReturnDataSize", "getReturnData"};
     void WasmerEngine::verifyContract(bytes_view code)
     {
         auto codeData = new unsigned char[code.size()];
@@ -475,6 +493,7 @@ namespace hera
         wasmer_export_descriptors_t *exports;
         wasmer_export_descriptors(module, &exports);
         auto len = wasmer_export_descriptors_len(exports);
+        int isBCIExported = 1;
         for (int i = 0; i < len; ++i)
         {
             auto exportObj = wasmer_export_descriptors_get(exports, i);
@@ -486,8 +505,9 @@ namespace hera
                     wasmer_export_descriptor_kind(exportObj) == wasmer_import_export_kind::WASM_MEMORY,
                     ContractValidationFailure, "\"memory\" is not pointing to memory.");
             }
-            else if (objectName == "deploy" || objectName == "main")
+            else if (objectName == "deploy" || objectName == "main" || objectName == "hash_type")
             {
+                isBCIExported <<= 1;
                 ensureCondition(wasmer_export_descriptor_kind(exportObj) ==
                                     wasmer_import_export_kind::WASM_FUNCTION,
                                 ContractValidationFailure, "\"main\" is not pointing to function.");
@@ -503,6 +523,10 @@ namespace hera
                 HERA_DEBUG << "Invalid export is " << objectName << "\n";
                 ensureCondition(false, ContractValidationFailure, "Invalid export is present.");
             }
+        }
+        if (isBCIExported != 1 << 3)
+        {
+            ensureCondition(false, ContractValidationFailure, "BCI(deploy/main/hash_type) are not all exported.");
         }
         wasmer_export_descriptors_destroy(exports);
         wasmer_import_descriptors_t *imports;
@@ -580,6 +604,20 @@ namespace hera
         if (msg.kind == EVMC_CREATE)
         {
             callName = "deploy";
+            bool useSM3Hash = 0;
+            if (context.get_host_context()->sm3_hash_fn)
+            {
+                useSM3Hash = 1;
+            }
+            HERA_DEBUG << "host hash algorithm is " << (useSM3Hash ? "sm3" : "keccak256") << ", Get hash type of contract...\n";
+            wasmer_value_t hashTypeResult[1];
+            call_result = wasmer_instance_call(instance, "hash_type", params, 0, hashTypeResult, 1);
+            ensureCondition(call_result == wasmer_result_t::WASMER_OK, ContractValidationFailure,
+                            "call hash_type failed, because of " + getWasmerErrorString());
+            HERA_DEBUG << "Contract hash algorithm is " << (hashTypeResult[0].value.I32 ? "sm3\n" : "keccak256\n");
+            // 0:keccak256, 1:sm3
+            ensureCondition(hashTypeResult[0].value.I32 == useSM3Hash, ContractValidationFailure,
+                            "hash type mismatch");
         }
         try
         {
@@ -623,6 +661,10 @@ namespace hera
             {
                 HERA_DEBUG << UNREACHABLE << "\n";
                 throw hera::Unreachable(UNREACHABLE);
+            }
+            else if (errorMessage.find(REVERT) != std::string::npos)
+            {
+                HERA_DEBUG << REVERT << "\n";
             }
             else
             {
