@@ -871,8 +871,8 @@ void WasmEngine::collectBenchmarkingData()
 
       ensureCondition(!(m_msg.flags & EVMC_STATIC), StaticModeViolation, "storageStore");
 
-      const char * key = (const char *)memoryPointer(keyOffset,keyLength);
-      const char * value = (const char *)memoryPointer(valueOffset,valueLength);
+      const char * key = (const char *)memoryPointer(keyOffset, keyLength);
+      const char * value = (const char *)memoryPointer(valueOffset, valueLength);
       m_host.set(m_msg.destination, key, (int32_t)keyLength, value, (int32_t)valueLength);
   }
 
@@ -882,9 +882,47 @@ void WasmEngine::collectBenchmarkingData()
 
       takeInterfaceGas(GasSchedule::storageLoad);
 
-      const char * key = (const char *)memoryPointer(keyOffset,keyLength);
-      char * value = (char *)memoryPointer(valueOffset,valueLength);
+      const char * key = (const char *)memoryPointer(keyOffset, keyLength);
+      char * value = (char *)memoryPointer(valueOffset, valueLength);
       return m_host.get(m_msg.destination, key, (int32_t)keyLength, value, (int32_t)valueLength);
   }
-
+  int32_t EthereumInterface::beiRegisterAsset(uint32_t assetnameOffset, uint32_t length, uint32_t addressOffset, int32_t fungible, uint64_t total, uint32_t descriptionOffset, uint32_t descriptionLength)
+  {
+    const char * assetName = (const char *)memoryPointer(assetnameOffset, length);
+    const char * description = (const char *)memoryPointer(descriptionOffset, descriptionLength);
+    const evmc_address * issuer = (const evmc_address *)memoryPointer(addressOffset, 20);
+    return m_host.get_host_context()->interface->register_asset(m_host.get_host_context(), assetName, (int32_t)length, issuer, fungible, total, description, (int32_t)descriptionLength);
+  }
+  int32_t EthereumInterface::beiIssueFungibleAsset(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t amount)
+  {
+    const char * assetName = (const char *)memoryPointer(assetnameOffset, length);
+    const evmc_address * to = (const evmc_address *)memoryPointer(addressOffset, 20);
+    return m_host.get_host_context()->interface->issue_fungible_asset(m_host.get_host_context(), to, assetName, (int32_t)length, amount);
+  }
+  uint64_t EthereumInterface::beiIssueNotFungibleAsset(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t uriOffset, uint32_t uriLength)
+  {
+    const char * assetName = (const char *)memoryPointer(assetnameOffset, length);
+    const char * uri = (const char *)memoryPointer(uriOffset, uriLength);
+    const evmc_address * to = (const evmc_address *)memoryPointer(addressOffset, 20);
+    return m_host.get_host_context()->interface->issue_not_fungible_asset(m_host.get_host_context(), to, assetName, (int32_t)length, uri, (int32_t)uriLength);
+  }
+  int32_t EthereumInterface::beiTransferAsset(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t amountOrID, int32_t fromSelf)
+  {
+    const char * assetName = (const char *)memoryPointer(assetnameOffset, length);
+    const evmc_address * to = (const evmc_address *)memoryPointer(addressOffset, 20);
+    return m_host.get_host_context()->interface->transfer_asset(m_host.get_host_context(), to, assetName, (int32_t)length, amountOrID, fromSelf);
+  }
+  uint64_t EthereumInterface::beiGetAssetBanlance(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length)
+  {
+    const char * assetName = (const char *)memoryPointer(assetnameOffset, length);
+    const evmc_address * account = (const evmc_address *)memoryPointer(addressOffset, 20);
+    return m_host.get_host_context()->interface->get_asset_balance(m_host.get_host_context(), account, assetName, (int32_t)length);
+  }
+  int32_t EthereumInterface::beiGetNotFungibleAssetIDs(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t resultOffset, uint32_t resultLength)
+  {
+    const char * assetName = (const char *)memoryPointer(assetnameOffset, length);
+    char * result = (char *)memoryPointer(resultOffset, resultLength);
+    const evmc_address * account = (const evmc_address *)memoryPointer(addressOffset, 20);
+    return m_host.get_host_context()->interface->get_asset_ids(m_host.get_host_context(), account, assetName, (int32_t)length, result, (int32_t)resultLength);
+  }
 }

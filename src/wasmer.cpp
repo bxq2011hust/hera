@@ -119,6 +119,16 @@ namespace hera
             wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
         wasmer_value_tag i32_4[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
                                     wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
+        wasmer_value_tag i32_5[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
+                                    wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
+
+        wasmer_value_tag i32_4_i64_i32_2[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
+                                              wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I64,
+                                              wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
+        wasmer_value_tag i32_3_i64[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
+                                        wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I64};
+        wasmer_value_tag i32_3_i64_i32[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
+                                            wasmer_value_tag::WASM_I64, wasmer_value_tag::WASM_I32};
         wasmer_value_tag i32_7[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
                                     wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
                                     wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
@@ -355,6 +365,36 @@ namespace hera
             auto interface = getInterfaceFromVontext(ctx);
             interface->eeiSelfDestruct(addressOffset);
         }
+        int32_t beiRegisterAsset(wasmer_instance_context_t *ctx, uint32_t assetnameOffset, uint32_t length, uint32_t addressOffset, int32_t fungible, uint64_t total, uint32_t descriptionOffset, uint32_t descriptionLength)
+        {
+            auto interface = getInterfaceFromVontext(ctx);
+            return interface->beiRegisterAsset(assetnameOffset, length, addressOffset, fungible, total, descriptionOffset, descriptionLength);
+        }
+        int32_t beiIssueFungibleAsset(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t amount)
+        {
+            auto interface = getInterfaceFromVontext(ctx);
+            return interface->beiIssueFungibleAsset(addressOffset, assetnameOffset, length, amount);
+        }
+        uint64_t beiIssueNotFungibleAsset(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t uriOffset, uint32_t uriLength)
+        {
+            auto interface = getInterfaceFromVontext(ctx);
+            return interface->beiIssueNotFungibleAsset(addressOffset, assetnameOffset, length, uriOffset, uriLength);
+        }
+        int32_t beiTransferAsset(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t amountOrID, int32_t fromSelf)
+        {
+            auto interface = getInterfaceFromVontext(ctx);
+            return interface->beiTransferAsset(addressOffset, assetnameOffset, length, amountOrID, fromSelf);
+        }
+        uint64_t beiGetAssetBanlance(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length)
+        {
+            auto interface = getInterfaceFromVontext(ctx);
+            return interface->beiGetAssetBanlance(addressOffset, assetnameOffset, length);
+        }
+        int32_t beiGetNotFungibleAssetIDs(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t resultOffset, uint32_t resultLength)
+        {
+            auto interface = getInterfaceFromVontext(ctx);
+            return interface->beiGetNotFungibleAssetIDs(addressOffset, assetnameOffset, length, resultOffset, resultLength);
+        }
 #if HERA_DEBUGGING
         void print32(wasmer_instance_context_t *, uint32_t value)
         {
@@ -453,12 +493,20 @@ namespace hera
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCaller"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCaller, i32, 1, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("revert"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiRevert, i32_2, 2, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getTxOrigin"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetTxOrigin, i32, 1, NULL, 0)}});
-
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getBlockNumber"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockNumber, NULL, 0, i64, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getBlockTimestamp"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockTimestamp, NULL, 0, i64, 1)}});
             imports->emplace_back(
                 wasmer_import_t{bcosModule, getNameArray("log"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiLog, i32_7, 7, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getReturnDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetReturnDataSize, NULL, 0, i32, 1)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getReturnData"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiReturnDataCopy, i32_3, 1, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("call"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiCall, i32_3, 3, i32, 1)}});
+            // asset interfaces
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("registerAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiRegisterAsset, i32_4_i64_i32_2, 7, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("issueFungibleAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiIssueFungibleAsset, i32_3_i64, 4, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("issueNotFungibleAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiIssueNotFungibleAsset, i32_5, 5, i64, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("transferAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiTransferAsset, i32_3_i64_i32, 5, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getAssetBanlance"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetAssetBanlance, i32_3, 3, i64, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getNotFungibleAssetIDs"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetNotFungibleAssetIDs, i32_5, 5, i32, 1)}});
 
 #if HERA_DEBUGGING
             wasmer_byte_array debugModule = getNameArray("debug");

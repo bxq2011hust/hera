@@ -167,6 +167,13 @@ protected:
 
   void beiSetStorage(uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength);
   int32_t beiGetStorage(uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset, uint32_t valueLength);
+  int32_t beiRegisterAsset(uint32_t assetnameOffset, uint32_t length, uint32_t addressOffset, int32_t fungible, uint64_t total, uint32_t descriptionOffset, uint32_t descriptionLength);
+  int32_t beiIssueFungibleAsset(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t amount);
+  uint64_t beiIssueNotFungibleAsset(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t uriOffset, uint32_t uriLength);
+  int32_t beiTransferAsset(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t amountOrID, int32_t fromSelf);
+  uint64_t beiGetAssetBanlance(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length);
+  int32_t beiGetNotFungibleAssetIDs(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t resultOffset, uint32_t resultLength);
+
 #if HERA_WASMER
 protected:
 #else
