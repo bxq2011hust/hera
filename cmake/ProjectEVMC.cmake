@@ -9,7 +9,7 @@ if(NOT EVMC_ROOT)
                 # URL https://github.com/FISCO-BCOS/evmc/archive/e0bd9d5dc68ec3a00fe9a3c5e81c98946449a20d.tar.gz
                 # URL_HASH SHA256=a9983643415c8473cd696ff4aa93e014308f0292057bce740bc0b4ca84a40462
                 GIT_REPOSITORY https://github.com/bxq2011hust/evmc.git
-                GIT_TAG 8b6b585baf3c364f979e2029eb21c72465950112
+                GIT_TAG d951b1ef088be6922d80f41c3c83c0cbd69d2bfa
                 CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
                 BUILD_IN_SOURCE 1
                 LOG_CONFIGURE 1

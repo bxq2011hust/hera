@@ -31,6 +31,7 @@ using namespace std;
     }
 const char *OUT_OF_GAS = "Out of gas.";
 const char *REVERT = "revert";
+const char *MEMORY_ACCESS = "memory access";
 const char *UNREACHABLE = "unreachable";
 namespace hera
 {
@@ -124,6 +125,9 @@ namespace hera
 
         wasmer_value_tag i32_4_i64_i32_2[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
                                               wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I64,
+                                              wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
+        wasmer_value_tag i32_3_i64_i32_2[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
+                                              wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I64,
                                               wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
         wasmer_value_tag i32_3_i64[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
                                         wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I64};
@@ -385,15 +389,20 @@ namespace hera
             auto interface = getInterfaceFromVontext(ctx);
             return interface->beiTransferAsset(addressOffset, assetnameOffset, length, amountOrID, fromSelf);
         }
-        uint64_t beiGetAssetBanlance(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length)
+        uint64_t beiGetAssetBalance(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length)
         {
             auto interface = getInterfaceFromVontext(ctx);
-            return interface->beiGetAssetBanlance(addressOffset, assetnameOffset, length);
+            return interface->beiGetAssetBalance(addressOffset, assetnameOffset, length);
         }
         int32_t beiGetNotFungibleAssetIDs(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t resultOffset, uint32_t resultLength)
         {
             auto interface = getInterfaceFromVontext(ctx);
             return interface->beiGetNotFungibleAssetIDs(addressOffset, assetnameOffset, length, resultOffset, resultLength);
+        }
+        int32_t beiGetNotFungibleAssetInfo(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t assetID, uint32_t resultOffset, uint32_t resultLength)
+        {
+            auto interface = getInterfaceFromVontext(ctx);
+            return interface->beiGetNotFungibleAssetInfo(addressOffset, assetnameOffset, length, assetID, resultOffset, resultLength);
         }
 #if HERA_DEBUGGING
         void print32(wasmer_instance_context_t *, uint32_t value)
@@ -486,6 +495,7 @@ namespace hera
             wasmer_byte_array bcosModule = getNameArray("bcos");
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("useGas"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiUseGas, i64, 1, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("finish"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiFinish, i32_2, 2, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getAddress"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetAddress, i32, 1, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCallDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCallDataSize, NULL, 0, i32, 1)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCallData"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetCallData, i32, 1, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("setStorage"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiSetStorage, i32_4, 4, NULL, 0)}});
@@ -493,6 +503,7 @@ namespace hera
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCaller"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCaller, i32, 1, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("revert"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiRevert, i32_2, 2, NULL, 0)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getTxOrigin"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetTxOrigin, i32, 1, NULL, 0)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getExternalCodeSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetExternalCodeSize, i32, 1, i32, 1)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getBlockNumber"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockNumber, NULL, 0, i64, 1)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getBlockTimestamp"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockTimestamp, NULL, 0, i64, 1)}});
             imports->emplace_back(
@@ -505,8 +516,9 @@ namespace hera
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("issueFungibleAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiIssueFungibleAsset, i32_3_i64, 4, i32, 1)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("issueNotFungibleAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiIssueNotFungibleAsset, i32_5, 5, i64, 1)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("transferAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiTransferAsset, i32_3_i64_i32, 5, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getAssetBanlance"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetAssetBanlance, i32_3, 3, i64, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getAssetBalance"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetAssetBalance, i32_3, 3, i64, 1)}});
             imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getNotFungibleAssetIDs"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetNotFungibleAssetIDs, i32_5, 5, i32, 1)}});
+            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getNotFungibleAssetInfo"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetNotFungibleAssetInfo, i32_3_i64_i32_2, 6, i32, 1)}});
 
 #if HERA_DEBUGGING
             wasmer_byte_array debugModule = getNameArray("debug");
@@ -527,8 +539,10 @@ namespace hera
                                           "getBlockTimestamp", "getTxOrigin", "storageStore", "storageLoad", "finish", "revert",
                                           "getReturnDataSize", "returnDataCopy", "call", "callCode", "callDelegate", "callStatic",
                                           "create", "selfDestruct"};
-    static const set<string> beiFunctions{"finish", "getCallDataSize", "getCallData", "setStorage",
-                                          "getStorage", "getCaller", "revert", "getTxOrigin", "log", "getReturnDataSize", "getReturnData"};
+    static const set<string> beiFunctions{"useGas", "finish", "getAddress", "getCallDataSize", "getCallData", "setStorage", "getStorage",
+                                          "getCaller", "revert", "getTxOrigin", "getExternalCodeSize", "log", "getReturnDataSize", "getReturnData", "call",
+                                          "registerAsset", "issueFungibleAsset", "issueNotFungibleAsset", "transferAsset", "getAssetBalance", "getNotFungibleAssetIDs",
+                                          "getNotFungibleAssetInfo"};
     void WasmerEngine::verifyContract(bytes_view code)
     {
         auto codeData = new unsigned char[code.size()];
@@ -595,7 +609,7 @@ namespace hera
             auto nameBytes = wasmer_import_descriptor_name(importObj);
             string objectName((char *)nameBytes.bytes, nameBytes.bytes_len);
             ensureCondition(beiFunctions.count(objectName) || eeiFunctions.count(objectName),
-                            ContractValidationFailure, "Importing invalid EEI method.");
+                            ContractValidationFailure, "Importing invalid EEI method " + objectName);
             ensureCondition(
                 wasmer_import_descriptor_kind(importObj) == wasmer_import_export_kind::WASM_FUNCTION,
                 ContractValidationFailure, "Imported function type mismatch.");
@@ -698,7 +712,7 @@ namespace hera
         if (call_result != wasmer_result_t::WASMER_OK)
         {
             result.isRevert = true;
-            HERA_DEBUG << "call " << callName << " failed, error message:" << errorMessage << "\n";
+            HERA_DEBUG << "call " << callName << " failed, error message: " << errorMessage << "\n";
             //TODO: throw specific exception according to error message
             if (errorMessage.find(OUT_OF_GAS) != std::string::npos)
             {
@@ -713,6 +727,10 @@ namespace hera
             else if (errorMessage.find(REVERT) != std::string::npos)
             {
                 HERA_DEBUG << REVERT << "\n";
+            }
+            else if (errorMessage.find(MEMORY_ACCESS) != std::string::npos)
+            {
+                throw hera::InvalidMemoryAccess(MEMORY_ACCESS);
             }
             else
             {

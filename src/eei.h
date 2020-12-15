@@ -171,8 +171,9 @@ protected:
   int32_t beiIssueFungibleAsset(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t amount);
   uint64_t beiIssueNotFungibleAsset(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t uriOffset, uint32_t uriLength);
   int32_t beiTransferAsset(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t amountOrID, int32_t fromSelf);
-  uint64_t beiGetAssetBanlance(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length);
+  uint64_t beiGetAssetBalance(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length);
   int32_t beiGetNotFungibleAssetIDs(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t resultOffset, uint32_t resultLength);
+  int32_t beiGetNotFungibleAssetInfo(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t assetID, uint32_t resultOffset, uint32_t resultLength);
 
 #if HERA_WASMER
 protected:
