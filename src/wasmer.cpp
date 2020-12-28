@@ -33,6 +33,8 @@ const char *OUT_OF_GAS = "Out of gas.";
 const char *REVERT = "revert";
 const char *MEMORY_ACCESS = "memory access";
 const char *UNREACHABLE = "unreachable";
+const char *STACK_OVERFLOW = "stack exhausted";
+
 namespace hera
 {
     class WasmerEthereumInterface : public EthereumInterface
@@ -723,6 +725,11 @@ namespace hera
             {
                 HERA_DEBUG << UNREACHABLE << "\n";
                 throw hera::Unreachable(UNREACHABLE);
+            }
+            else if (errorMessage.find(STACK_OVERFLOW) != std::string::npos)
+            {
+                HERA_DEBUG << STACK_OVERFLOW << "\n";
+                throw hera::Unreachable(STACK_OVERFLOW);
             }
             else if (errorMessage.find(REVERT) != std::string::npos)
             {
