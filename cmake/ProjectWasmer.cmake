@@ -12,13 +12,13 @@ ExternalProject_Add(wasmer
         PREFIX ${CMAKE_SOURCE_DIR}/deps
         DOWNLOAD_NO_PROGRESS 1
         GIT_REPOSITORY https://github.com/wasmerio/wasmer.git
-        GIT_SHALLOW true
-        GIT_TAG 1089a4dc208ec41726aa021d882b326b6f765d18
+        # GIT_SHALLOW true
+        GIT_TAG 9fc9daaedd44994c439f8232809d3ae9dabe1bd3
         BUILD_IN_SOURCE 1
-        UPDATE_COMMAND COMMAND git checkout Cargo.toml
+        PATCH_COMMAND COMMAND git checkout Cargo.lock
         CONFIGURE_COMMAND COMMAND git checkout Cargo.toml COMMAND echo "[profile.release]" >> Cargo.toml COMMAND echo "lto=false" >> Cargo.toml
         BUILD_COMMAND ${WASMER_BUILD_COMMAND}
-        INSTALL_COMMAND ""
+        INSTALL_COMMAND COMMAND git checkout Cargo.toml
         # must not log configure
         LOG_CONFIGURE 0
         LOG_BUILD 1

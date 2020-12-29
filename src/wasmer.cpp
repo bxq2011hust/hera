@@ -547,10 +547,8 @@ namespace hera
                                           "getNotFungibleAssetInfo"};
     void WasmerEngine::verifyContract(bytes_view code)
     {
-        auto codeData = new unsigned char[code.size()];
-        memcpy(codeData, code.data(), code.size());
         wasmer_module_t *module;
-        auto compile_result = wasmer_compile(&module, codeData, (unsigned int)code.size());
+        auto compile_result = wasmer_compile(&module, const_cast<uint8_t *>(code.data()), (unsigned int)code.size());
 
         ensureCondition(compile_result == wasmer_result_t::WASMER_OK, ContractValidationFailure,
                         "Compile wasm failed.");
@@ -632,13 +630,11 @@ namespace hera
         auto imports = initImportes();
         // Instantiate a WebAssembly Instance from Wasm bytes and imports
         wasmer_instance_t *instance = NULL;
-        // TODO: check if need free codeData, for me it seems wasmer will free
-        auto codeData = new unsigned char[code.size()];
-        memcpy(codeData, code.data(), code.size());
+        // TODO: check if need free code, for me it seems wasmer will free
         HERA_DEBUG << "Compile wasm code use wasmer...\n";
         wasmer_result_t compile_result =
             wasmer_instantiate(&instance,                                       // Our reference to our Wasm instance
-                               codeData,                                        // The bytes of the WebAssembly modules
+                               const_cast<uint8_t *>(code.data()),              // The bytes of the WebAssembly modules
                                (uint32_t)code.size(),                           // The length of the bytes of the WebAssembly module
                                static_cast<wasmer_import_t *>(imports->data()), // The Imports array the will be used
                                                                                 // as our importObject
@@ -708,6 +704,7 @@ namespace hera
         }
 
         auto errorMessage = getWasmerErrorString();
+        wasmer_memory_destroy(const_cast<wasmer_memory_t *>(memory));
         wasmer_instance_destroy(instance);
         executionFinished();
 
