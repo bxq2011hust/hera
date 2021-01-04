@@ -698,7 +698,7 @@ namespace hera
         // TODO: check if we need process wasmer_result_t
         // ensureCondition(call_result == wasmer_result_t::WASMER_OK, EndExecution, string("Call main
         // failed, ") + getWasmerErrorString());
-        if (msg.kind == EVMC_CREATE)
+        if (msg.kind == EVMC_CREATE && !result.isRevert)
         {
             result.returnValue = code;
         }
