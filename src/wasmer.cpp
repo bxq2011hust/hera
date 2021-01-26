@@ -31,6 +31,7 @@ using namespace std;
     }
 const char *OUT_OF_GAS = "Out of gas.";
 const char *REVERT = "revert";
+const char *FINISH = "finish";
 const char *MEMORY_ACCESS = "memory access";
 const char *UNREACHABLE = "unreachable";
 const char *STACK_OVERFLOW = "stack exhausted";
@@ -72,15 +73,12 @@ namespace hera
             m_result.isRevert = revert;
             if (revert)
             {
-                wasmer_trap(_wasmContext, "revert");
-                return;
+                wasmer_trap(_wasmContext, REVERT);
             }
-            //throw EndExecution{};
-            //FIXME: throw exception will crash host
-            int value_one = 24;
-            int value_two = 0;
-            int error = value_one / value_two;
-            (void)error;
+            else
+            {
+                wasmer_trap(_wasmContext, FINISH);
+            }
         }
 
     private:
@@ -715,7 +713,7 @@ namespace hera
         if (call_result != wasmer_result_t::WASMER_OK)
         {
             result.isRevert = true;
-            HERA_DEBUG << "call " << callName << " failed, error message: " << errorMessage << "\n";
+            HERA_DEBUG << "call " << callName << ", error message: " << errorMessage << "\n";
             //TODO: throw specific exception according to error message
             if (errorMessage.find(OUT_OF_GAS) != std::string::npos)
             {
@@ -740,11 +738,17 @@ namespace hera
             {
                 throw hera::InvalidMemoryAccess(MEMORY_ACCESS);
             }
+            else if (errorMessage.find(FINISH) != std::string::npos)
+            {
+                result.isRevert = false;
+                HERA_DEBUG << FINISH << "\n";
+            }
             else
             {
                 throw std::runtime_error("Unknown error.");
             }
         }
+#if HERA_DEBUGGING
         else
         { // FIXME: debug log should delete before release
             HERA_DEBUG << "Output size is " << result.returnValue.size() << ", ouput=";
@@ -754,7 +758,7 @@ namespace hera
             }
             HERA_DEBUG << " done\n";
         }
-
+#endif
         return result;
     };
 } // namespace hera
