@@ -59,6 +59,8 @@ if (HERA_WAVM)
 endif()
 
 option(HERA_WASMER "Build with wasmer" ON)
+option(HERA_WASMER_NATIVE_ENGINE "Build wasmer with native engine" OFF)
+option(HERA_WASMER_LLVM_BACKEND "Build wasmer with LLVM backend" OFF)
 if (HERA_WASMER)
     include(ProjectWasmer)
 endif()

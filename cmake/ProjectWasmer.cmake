@@ -6,14 +6,22 @@ include(ExternalProject)
 include(GNUInstallDirs)
 
 # TODO: if find LLVM 8.0+ use make capi-llvm to get better permformance
-set(WASMER_BUILD_COMMAND COMMAND make build-capi)
+set(ENGINE "jit")
+set(BACKEND "cranelift")
+if(HERA_WASMER_NATIVE_ENGINE)
+    set(ENGINE "native")
+endif()
+if(HERA_WASMER_LLVM_BACKEND)
+    set(BACKEND "llvm")
+endif()
+set(WASMER_BUILD_COMMAND COMMAND make build-capi-${BACKEND}-${ENGINE})
 # set(WASMER_BUILD_COMMAND cargo clean COMMAND cargo update COMMAND make build-capi)
 ExternalProject_Add(wasmer
         PREFIX ${CMAKE_SOURCE_DIR}/deps
         DOWNLOAD_NO_PROGRESS 1
         GIT_REPOSITORY https://github.com/wasmerio/wasmer.git
         # GIT_SHALLOW true
-        GIT_TAG 9fc9daaedd44994c439f8232809d3ae9dabe1bd3
+        GIT_TAG 98cf81c5fb409a4bbaee8de971b3c34c53e23b4f
         BUILD_IN_SOURCE 1
         PATCH_COMMAND COMMAND git checkout Cargo.lock
         CONFIGURE_COMMAND COMMAND git checkout Cargo.toml COMMAND echo "[profile.release]" >> Cargo.toml COMMAND echo "lto=false" >> Cargo.toml

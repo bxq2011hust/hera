@@ -57,6 +57,10 @@ namespace hera
             hostEnsure(gas <= m_result.gasLeft, m_wasmContext, OUT_OF_GAS);
             m_result.gasLeft -= gas;
         }
+        int64_t gesLeft()
+        {
+            return m_result.gasLeft;
+        }
         void beiRevertOrFinish(const wasmer_instance_context_t *_wasmContext, bool revert, uint32_t offset, uint32_t size)
         {
             HERA_DEBUG << (revert ? "revert " : "finish ") << hex << offset << " " << size << dec << "\n";
@@ -190,7 +194,7 @@ namespace hera
         void beiUseGas(wasmer_instance_context_t *ctx, int64_t gas)
         {
             auto interface = getInterfaceFromVontext(ctx);
-            HERA_DEBUG << " useGas " << gas << "\n";
+            HERA_DEBUG << " useGas " << gas << ", left=" << interface->gesLeft() << "\n";
             hostEnsure(gas >= 0, ctx, "Negative gas supplied.");
             interface->takeGas(gas);
         }
