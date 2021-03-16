@@ -12,32 +12,44 @@
  */
 
 #include "wasmer.h"
-#include "c-api/wasmer.hh"
+#include "c-api/wasmer_wasm.h"
 #include "debugging.h"
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cinttypes>
 #include <functional>
 #include <iostream>
 #include <memory>
-#include <set>
 #include <vector>
+#include <set>
+#include <map>
+
+#define own
 
 using namespace std;
 
-#define hostEnsure(condition, ctx, msg) \
-    if (!(condition))                   \
-    {                                   \
-        HERA_DEBUG << msg << "\n";      \
-        wasmer_trap(ctx, msg);          \
-    }
 const char *OUT_OF_GAS = "Out of gas.";
 const char *REVERT = "revert";
 const char *FINISH = "finish";
 const char *MEMORY_ACCESS = "memory access";
 const char *UNREACHABLE = "unreachable";
 const char *STACK_OVERFLOW = "stack exhausted";
+const string BCOS_MODULE_NAME = "bcos";
+const string DEBUG_MODULE_NAME = "debug";
+const string ETHEREUM_MODULE_NAME = "ethereum";
 
 namespace hera
 {
+    struct ImportFunction
+    {
+        ~ImportFunction()
+        {
+            wasm_functype_delete(functionType);
+        }
+        wasm_functype_t *functionType;
+        wasm_func_callback_with_env_t function;
+    };
     class WasmerEthereumInterface : public EthereumInterface
     {
     public:
@@ -47,22 +59,17 @@ namespace hera
         {
         }
 
-        void setWasmMemory(const wasmer_memory_t *_wasmMemory) { m_wasmMemory = _wasmMemory; }
-        void setWasmContext(const wasmer_instance_context_t *_wasmContext)
+        void setWasmMemory(wasm_memory_t *_wasmMemory) { m_wasmMemory = _wasmMemory; }
+        void setWasmStore(wasm_store_t *_wasmStore)
         {
-            m_wasmContext = const_cast<wasmer_instance_context_t *>(_wasmContext);
+            m_wasmStore = _wasmStore;
         }
 
-        void takeGas(int64_t gas) override
-        { // NOTE: gas >= 0 is validated by the callers of this method
-            hostEnsure(gas <= m_result.gasLeft, m_wasmContext, OUT_OF_GAS);
-            m_result.gasLeft -= gas;
-        }
         int64_t gesLeft()
         {
             return m_result.gasLeft;
         }
-        void beiRevertOrFinish(const wasmer_instance_context_t *_wasmContext, bool revert, uint32_t offset, uint32_t size)
+        own wasm_trap_t *beiRevertOrFinish(void *env, bool revert, uint32_t offset, uint32_t size)
         {
             HERA_DEBUG << (revert ? "revert " : "finish ") << hex << offset << " " << size << dec << "\n";
 
@@ -71,43 +78,48 @@ namespace hera
             loadMemory(offset, m_result.returnValue, size);
 
             m_result.isRevert = revert;
+            own wasm_name_t message;
             if (revert)
             {
-                wasmer_trap(_wasmContext, REVERT);
+                wasm_name_new_from_string_nt(&message, REVERT);
             }
             else
             {
-                wasmer_trap(_wasmContext, FINISH);
+                wasm_name_new_from_string_nt(&message, FINISH);
             }
+            own wasm_trap_t *trap = wasm_trap_new((wasm_store_t *)env, &message);
+            wasm_name_delete(&message);
+            return trap;
         }
 
     private:
         // These assume that m_wasmMemory was set prior to execution.
-        size_t memorySize() const override { return wasmer_memory_data_length(m_wasmMemory); }
+        size_t memorySize() const override { return wasm_memory_data_size(m_wasmMemory); }
+        uint32_t memoryPages() const { return wasm_memory_size(m_wasmMemory); }
         void memorySet(size_t offset, uint8_t value) override
         {
-            auto data = wasmer_memory_data(m_wasmMemory);
+            auto data = wasm_memory_data(m_wasmMemory);
             ensureCondition(data != NULL, InvalidMemoryAccess, string("memorySet failed"));
-            data[offset] = value;
+            data[offset] = (char)value;
         }
         uint8_t memoryGet(size_t offset) override
         {
             ensureCondition(memorySize() >= offset, InvalidMemoryAccess,
                             "Memory is shorter than requested segment");
-            auto data = wasmer_memory_data(m_wasmMemory);
+            auto data = wasm_memory_data(m_wasmMemory);
             ensureCondition(data != NULL, InvalidMemoryAccess, string("memoryGet failed"));
-            return data[offset];
+            return (uint8_t)data[offset];
         }
         uint8_t *memoryPointer(size_t offset, size_t length) override
         {
             ensureCondition(memorySize() >= (offset + length), InvalidMemoryAccess,
                             "Memory is shorter than requested segment");
-            auto data = wasmer_memory_data(m_wasmMemory);
-            return data + offset;
+            auto data = wasm_memory_data(m_wasmMemory) + offset;
+            return (uint8_t *)data;
         }
 
-        const wasmer_memory_t *m_wasmMemory;
-        wasmer_instance_context_t *m_wasmContext = nullptr;
+        wasm_memory_t *m_wasmMemory;
+        wasm_store_t *m_wasmStore = nullptr;
     };
 
     unique_ptr<WasmEngine> WasmerEngine::create()
@@ -116,425 +128,752 @@ namespace hera
     }
     namespace
     {
-        wasmer_value_tag i32[] = {wasmer_value_tag::WASM_I32};
-        wasmer_value_tag i64[] = {wasmer_value_tag::WASM_I64};
-        wasmer_value_tag i64_i32[] = {wasmer_value_tag::WASM_I64, wasmer_value_tag::WASM_I32};
-        wasmer_value_tag i32_2[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
-        wasmer_value_tag i32_3[] = {
-            wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
-        wasmer_value_tag i32_4[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
-                                    wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
-        wasmer_value_tag i32_5[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
-                                    wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
 
-        wasmer_value_tag i32_4_i64_i32_2[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
-                                              wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I64,
-                                              wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
-        wasmer_value_tag i32_3_i64_i32_2[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
-                                              wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I64,
-                                              wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
-        wasmer_value_tag i32_3_i64[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
-                                        wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I64};
-        wasmer_value_tag i32_3_i64_i32[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
-                                            wasmer_value_tag::WASM_I64, wasmer_value_tag::WASM_I32};
-        wasmer_value_tag i32_7[] = {wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
-                                    wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32,
-                                    wasmer_value_tag::WASM_I32, wasmer_value_tag::WASM_I32};
-
-        // Function to print the most recent error string from Wasmer if we have them
-        string getWasmerErrorString()
+        static inline own wasm_functype_t *wasm_functype_new_4_0(
+            own wasm_valtype_t *p1, own wasm_valtype_t *p2, own wasm_valtype_t *p3, own wasm_valtype_t *p4)
         {
-            int error_len = wasmer_last_error_length();
-            char *error_str = new char[(uint64_t)error_len];
-            wasmer_last_error_message(error_str, error_len);
-            string error((const char *)error_str, (size_t)error_len);
-            delete[] error_str;
-            return error;
+            wasm_valtype_vec_t params, results;
+            wasm_valtype_t *ps[4] = {p1, p2, p3, p4};
+            wasm_valtype_vec_new(&params, 4, ps);
+            return wasm_functype_new(&params, &results);
         }
-#if 0
-        // Function to create a wasmer memory instance, so we can import
-        // memory into a wasmer instance.
-        wasmer_memory_t *create_wasmer_memory()
+        static inline own wasm_functype_t *wasm_functype_new_7_0(
+            own wasm_valtype_t *p1, own wasm_valtype_t *p2, own wasm_valtype_t *p3, own wasm_valtype_t *p4, own wasm_valtype_t *p5, own wasm_valtype_t *p6, own wasm_valtype_t *p7)
         {
-            // Create our initial size of the memory
-            wasmer_memory_t *memory = NULL;
-            // Create our maximum memory size.
-            // .has_some represents wether or not the memory has a maximum size
-            // .some is the value of the maxiumum size
-            wasmer_limit_option_t max = {true, 256};
-            // Create our memory descriptor, to set our minimum and maximum memory size
-            // .min is the minimum size of the memory
-            // .max is the maximuum size of the memory
-            wasmer_limits_t descriptor = {64, max};
-
-            // Create our memory instance, using our memory and descriptor,
-            wasmer_result_t memory_result = wasmer_memory_new(&memory, descriptor);
-            // Ensure the memory was instantiated successfully.
-            if (memory_result != wasmer_result_t::WASMER_OK)
-            {
-                ensureCondition(memory != NULL, InvalidMemoryAccess, string("get memory from wasmer failed, ") + getWasmerErrorString());
-            }
-
-            // Return the Wasmer Memory Instance
-            return memory;
+            wasm_valtype_vec_t params, results;
+            wasm_valtype_t *ps[7] = {p1, p2, p3, p4, p5, p6, p7};
+            wasm_valtype_vec_new(&params, 7, ps);
+            return wasm_functype_new(&params, &results);
         }
-#endif
-        wasmer_byte_array getNameArray(const char *name)
+        static inline own wasm_functype_t *wasm_functype_new_4_1(
+            own wasm_valtype_t *p1, own wasm_valtype_t *p2, own wasm_valtype_t *p3, own wasm_valtype_t *p4, own wasm_valtype_t *r)
         {
-            return wasmer_byte_array{(const uint8_t *)name, (uint32_t)strlen(name)};
+            wasm_valtype_vec_t params, results;
+            wasm_valtype_t *ps[4] = {p1, p2, p3, p4};
+            wasm_valtype_t *rs[1] = {r};
+            wasm_valtype_vec_new(&params, 4, ps);
+            wasm_valtype_vec_new(&results, 1, rs);
+            return wasm_functype_new(&params, &results);
+        }
+        static inline own wasm_functype_t *wasm_functype_new_5_1(
+            own wasm_valtype_t *p1, own wasm_valtype_t *p2, own wasm_valtype_t *p3, own wasm_valtype_t *p4, own wasm_valtype_t *p5, own wasm_valtype_t *r)
+        {
+            wasm_valtype_vec_t params, results;
+            wasm_valtype_t *ps[5] = {p1, p2, p3, p4, p5};
+            wasm_valtype_t *rs[1] = {r};
+            wasm_valtype_vec_new(&params, 5, ps);
+            wasm_valtype_vec_new(&results, 1, rs);
+            return wasm_functype_new(&params, &results);
+        }
+        static inline own wasm_functype_t *wasm_functype_new_6_1(
+            own wasm_valtype_t *p1, own wasm_valtype_t *p2, own wasm_valtype_t *p3, own wasm_valtype_t *p4, own wasm_valtype_t *p5, own wasm_valtype_t *p6, own wasm_valtype_t *r)
+        {
+            wasm_valtype_vec_t params, results;
+            wasm_valtype_t *ps[6] = {p1, p2, p3, p4, p5, p6};
+            wasm_valtype_t *rs[1] = {r};
+            wasm_valtype_vec_new(&params, 6, ps);
+            wasm_valtype_vec_new(&results, 1, rs);
+            return wasm_functype_new(&params, &results);
+        }
+        static inline own wasm_functype_t *wasm_functype_new_7_1(
+            own wasm_valtype_t *p1, own wasm_valtype_t *p2, own wasm_valtype_t *p3, own wasm_valtype_t *p4, own wasm_valtype_t *p5, own wasm_valtype_t *p6, own wasm_valtype_t *p7, own wasm_valtype_t *r)
+        {
+            wasm_valtype_vec_t params, results;
+            wasm_valtype_t *ps[7] = {p1, p2, p3, p4, p5, p6, p7};
+            wasm_valtype_t *rs[1] = {r};
+            wasm_valtype_vec_new(&params, 7, ps);
+            wasm_valtype_vec_new(&results, 1, rs);
+            return wasm_functype_new(&params, &results);
         }
 
-        WasmerEthereumInterface *getInterfaceFromVontext(wasmer_instance_context_t *ctx)
+        WasmerEthereumInterface *getInterfaceFromEnv(void *env)
         {
-            return (WasmerEthereumInterface *)wasmer_instance_context_data_get(ctx);
+            return (WasmerEthereumInterface *)env;
         }
 
-        void beiUseGas(wasmer_instance_context_t *ctx, int64_t gas)
+        own wasm_trap_t *beiUseGas(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto gas = args->data[0].of.i64;
             HERA_DEBUG << " useGas " << gas << ", left=" << interface->gesLeft() << "\n";
-            hostEnsure(gas >= 0, ctx, "Negative gas supplied.");
-            interface->takeGas(gas);
+            if (gas < 0)
+            {
+                own wasm_name_t message;
+                wasm_name_new_from_string_nt(&message, "Negative gas supplied.");
+                own wasm_trap_t *trap = wasm_trap_new((wasm_store_t *)env, &message);
+                wasm_name_delete(&message);
+                return trap;
+            }
+            interface->eeiUseGas(gas);
+            if (interface->eeiGetGasLeft() < 0)
+            {
+                own wasm_name_t message;
+                wasm_name_new_from_string_nt(&message, OUT_OF_GAS);
+                own wasm_trap_t *trap = wasm_trap_new((wasm_store_t *)env, &message);
+                wasm_name_delete(&message);
+                return trap;
+            }
+            return NULL;
         }
-        int64_t eeiGetGasLeft(wasmer_instance_context_t *ctx)
+        own wasm_trap_t *eeiGetGasLeft(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->eeiGetGasLeft();
+            auto interface = getInterfaceFromEnv(env);
+            results->data[0].kind = WASM_I64;
+            results->data[1].of.i64 = (int64_t)interface->eeiGetGasLeft();
+            return NULL;
         }
-        void eeiGetAddress(wasmer_instance_context_t *ctx, uint32_t resultOffset)
+        own wasm_trap_t *eeiGetAddress(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto resultOffset = (uint32_t)args->data[0].of.i32;
             interface->eeiGetAddress(resultOffset);
+            return NULL;
         }
-        void eeiGetExternalBalance(
-            wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t resultOffset)
+        own wasm_trap_t *eeiGetExternalBalance(
+            void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
+            auto resultOffset = (uint32_t)args->data[0].of.i32;
             interface->eeiGetExternalBalance(addressOffset, resultOffset);
+            return NULL;
         }
 
-        uint32_t eeiGetBlockHash(wasmer_instance_context_t *ctx, uint64_t number, uint32_t resultOffset)
+        own wasm_trap_t *eeiGetBlockHash(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->eeiGetBlockHash(number, resultOffset);
+            auto interface = getInterfaceFromEnv(env);
+            auto number = (uint64_t)args->data[0].of.i64;
+            auto resultOffset = (uint32_t)args->data[0].of.i32;
+            results->data[0].kind = WASM_I32;
+            results->data[1].of.i32 = (int32_t)interface->eeiGetBlockHash(number, resultOffset);
+            return NULL;
         }
-        uint32_t eeiGetCallDataSize(wasmer_instance_context_t *ctx)
+        own wasm_trap_t *eeiGetCallDataSize(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->eeiGetCallDataSize();
+            auto interface = getInterfaceFromEnv(env);
+            results->data[0].kind = WASM_I32;
+            results->data[1].of.i32 = (int32_t)interface->eeiGetCallDataSize();
+            return NULL;
         }
-        void eeiCallDataCopy(
-            wasmer_instance_context_t *ctx, uint32_t resultOffset, uint32_t dataOffset, uint32_t length)
+        own wasm_trap_t *eeiCallDataCopy(
+            void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto resultOffset = (uint32_t)args->data[0].of.i32;
+            auto dataOffset = (uint32_t)args->data[1].of.i32;
+            auto length = (uint32_t)args->data[2].of.i32;
             interface->eeiCallDataCopy(resultOffset, dataOffset, length);
+            return NULL;
         }
-        void eeiGetCaller(wasmer_instance_context_t *ctx, uint32_t resultOffset)
+        own wasm_trap_t *eeiGetCaller(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto resultOffset = (uint32_t)args->data[0].of.i32;
             interface->eeiGetCaller(resultOffset);
+            return NULL;
         }
-        void eeiGetCallValue(wasmer_instance_context_t *ctx, uint32_t resultOffset)
+        own wasm_trap_t *eeiGetCallValue(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto resultOffset = (uint32_t)args->data[0].of.i32;
             interface->eeiGetCallValue(resultOffset);
+            return NULL;
         }
-        void eeiCodeCopy(
-            wasmer_instance_context_t *ctx, uint32_t resultOffset, uint32_t codeOffset, uint32_t length)
+        own wasm_trap_t *eeiCodeCopy(
+            void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto resultOffset = (uint32_t)args->data[0].of.i32;
+            auto codeOffset = (uint32_t)args->data[1].of.i32;
+            auto length = (uint32_t)args->data[2].of.i32;
             interface->eeiCodeCopy(resultOffset, codeOffset, length);
+            return NULL;
         }
-        uint32_t eeiGetCodeSize(wasmer_instance_context_t *ctx)
+        own wasm_trap_t *eeiGetCodeSize(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->eeiGetCodeSize();
+            auto interface = getInterfaceFromEnv(env);
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->eeiGetCodeSize();
+            return NULL;
         }
-        void eeiExternalCodeCopy(wasmer_instance_context_t *ctx, uint32_t addressOffset,
-                                 uint32_t resultOffset, uint32_t codeOffset, uint32_t length)
+        own wasm_trap_t *eeiExternalCodeCopy(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
+            auto resultOffset = (uint32_t)args->data[1].of.i32;
+            auto codeOffset = (uint32_t)args->data[2].of.i32;
+            auto length = (uint32_t)args->data[3].of.i32;
             interface->eeiExternalCodeCopy(addressOffset, resultOffset, codeOffset, length);
+            return NULL;
         }
-        uint32_t eeiGetExternalCodeSize(wasmer_instance_context_t *ctx, uint32_t addressOffset)
+        own wasm_trap_t *eeiGetExternalCodeSize(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->eeiGetExternalCodeSize(addressOffset);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->eeiGetExternalCodeSize(addressOffset);
+            return NULL;
         }
-        void eeiGetBlockCoinbase(wasmer_instance_context_t *ctx, uint32_t resultOffset)
+        own wasm_trap_t *eeiGetBlockCoinbase(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto resultOffset = (uint32_t)args->data[0].of.i32;
             interface->eeiGetBlockCoinbase(resultOffset);
+            return NULL;
         }
-        void eeiGetBlockDifficulty(wasmer_instance_context_t *ctx, uint32_t offset)
+        own wasm_trap_t *eeiGetBlockDifficulty(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto offset = (uint32_t)args->data[0].of.i32;
             interface->eeiGetBlockDifficulty(offset);
+            return NULL;
         }
-        int64_t eeiGetBlockGasLimit(wasmer_instance_context_t *ctx)
+        own wasm_trap_t *eeiGetBlockGasLimit(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->eeiGetBlockGasLimit();
+            auto interface = getInterfaceFromEnv(env);
+            results->data[0].kind = WASM_I64;
+            results->data[0].of.i64 = (int64_t)interface->eeiGetBlockGasLimit();
+            return NULL;
         }
-        void eeiGetTxGasPrice(wasmer_instance_context_t *ctx, uint32_t valueOffset)
+        own wasm_trap_t *eeiGetTxGasPrice(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto valueOffset = (uint32_t)args->data[0].of.i32;
             interface->eeiGetTxGasPrice(valueOffset);
+            return NULL;
         }
-        void eeiLog(wasmer_instance_context_t *ctx, uint32_t dataOffset, uint32_t length,
-                    uint32_t numberOfTopics, uint32_t topic1, uint32_t topic2, uint32_t topic3, uint32_t topic4)
+        own wasm_trap_t *eeiLog(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto dataOffset = (uint32_t)args->data[0].of.i32;
+            auto length = (uint32_t)args->data[1].of.i32;
+            auto numberOfTopics = (uint32_t)args->data[2].of.i32;
+            auto topic1 = (uint32_t)args->data[3].of.i32;
+            auto topic2 = (uint32_t)args->data[3].of.i32;
+            auto topic3 = (uint32_t)args->data[3].of.i32;
+            auto topic4 = (uint32_t)args->data[3].of.i32;
             interface->eeiLog(dataOffset, length, numberOfTopics, topic1, topic2, topic3, topic4);
+            return NULL;
         }
-        int64_t eeiGetBlockNumber(wasmer_instance_context_t *ctx)
+        own wasm_trap_t *eeiGetBlockNumber(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->eeiGetBlockNumber();
+            auto interface = getInterfaceFromEnv(env);
+            results->data[0].kind = WASM_I64;
+            results->data[0].of.i64 = (int64_t)interface->eeiGetBlockNumber();
+            return NULL;
         }
-        int64_t eeiGetBlockTimestamp(wasmer_instance_context_t *ctx)
+        own wasm_trap_t *eeiGetBlockTimestamp(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->eeiGetBlockTimestamp();
+            auto interface = getInterfaceFromEnv(env);
+            results->data[0].kind = WASM_I64;
+            results->data[0].of.i64 = (int64_t)interface->eeiGetBlockTimestamp();
+            return NULL;
         }
-        void eeiGetTxOrigin(wasmer_instance_context_t *ctx, uint32_t resultOffset)
+        own wasm_trap_t *eeiGetTxOrigin(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto resultOffset = (uint32_t)args->data[0].of.i32;
             interface->eeiGetTxOrigin(resultOffset);
+            return NULL;
         }
-        void eeiStorageStore(wasmer_instance_context_t *ctx, uint32_t pathOffset, uint32_t valueOffset)
+        own wasm_trap_t *eeiStorageStore(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto pathOffset = (uint32_t)args->data[0].of.i32;
+            auto valueOffset = (uint32_t)args->data[1].of.i32;
             interface->eeiStorageStore(pathOffset, valueOffset);
+            return NULL;
         }
-        void eeiStorageLoad(wasmer_instance_context_t *ctx, uint32_t pathOffset, uint32_t resultOffset)
+        own wasm_trap_t *eeiStorageLoad(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto pathOffset = (uint32_t)args->data[0].of.i32;
+            auto resultOffset = (uint32_t)args->data[1].of.i32;
             interface->eeiStorageLoad(pathOffset, resultOffset);
+            return NULL;
         }
-        void beiSetStorage(wasmer_instance_context_t *ctx, uint32_t keyOffset, uint32_t keyLength,
-                           uint32_t valueOffset, uint32_t valueLength)
+        own wasm_trap_t *beiSetStorage(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto keyOffset = (uint32_t)args->data[0].of.i32;
+            auto keyLength = (uint32_t)args->data[1].of.i32;
+            auto valueOffset = (uint32_t)args->data[2].of.i32;
+            auto valueLength = (uint32_t)args->data[3].of.i32;
             interface->beiSetStorage(keyOffset, keyLength, valueOffset, valueLength);
+            return NULL;
         }
-        int32_t beiGetStorage(
-            wasmer_instance_context_t *ctx, uint32_t keyOffset, uint32_t keyLength, uint32_t valueOffset)
+        own wasm_trap_t *beiGetStorage(
+            void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
             const int32_t maxLength = 19264;
-            return interface->beiGetStorage(keyOffset, keyLength, valueOffset, maxLength);
+            auto keyOffset = (uint32_t)args->data[0].of.i32;
+            auto keyLength = (uint32_t)args->data[1].of.i32;
+            auto valueOffset = (uint32_t)args->data[2].of.i32;
+            // auto valueLength = (uint32_t)args->data[3].of.i32;
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->beiGetStorage(keyOffset, keyLength, valueOffset, maxLength);
+            return NULL;
         }
-        void beiGetCallData(wasmer_instance_context_t *ctx, uint32_t resultOffset)
+        own wasm_trap_t *beiGetCallData(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto resultOffset = (uint32_t)args->data[0].of.i32;
             interface->eeiCallDataCopy(resultOffset, 0, interface->eeiGetCallDataSize());
+            return NULL;
         }
-        void eeiFinish(wasmer_instance_context_t *ctx, uint32_t offset, uint32_t size)
+        own wasm_trap_t *eeiFinish(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            interface->beiRevertOrFinish(ctx, false, offset, size);
+            auto interface = getInterfaceFromEnv(env);
+            auto offset = (uint32_t)args->data[0].of.i32;
+            auto size = (uint32_t)args->data[1].of.i32;
+            return interface->beiRevertOrFinish(env, false, offset, size);
         }
-        void eeiRevert(wasmer_instance_context_t *ctx, uint32_t offset, uint32_t size)
+        own wasm_trap_t *eeiRevert(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            interface->beiRevertOrFinish(ctx, true, offset, size);
+            auto interface = getInterfaceFromEnv(env);
+            auto offset = (uint32_t)args->data[0].of.i32;
+            auto size = (uint32_t)args->data[1].of.i32;
+            return interface->beiRevertOrFinish(env, true, offset, size);
         }
-        void beiCall(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t dataOffset, uint32_t dataLength)
+        own wasm_trap_t *beiCall(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
+            auto dataOffset = (uint32_t)args->data[1].of.i32;
+            auto dataLength = (uint32_t)args->data[2].of.i32;
             interface->eeiCall(EthereumInterface::EEICallKind::Call, interface->eeiGetGasLeft(), addressOffset, 0, dataOffset, dataLength);
+            return NULL;
         }
-        uint32_t eeiGetReturnDataSize(wasmer_instance_context_t *ctx)
+        own wasm_trap_t *eeiGetReturnDataSize(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->eeiGetReturnDataSize();
+            auto interface = getInterfaceFromEnv(env);
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->eeiGetReturnDataSize();
+            return NULL;
         }
-        void eeiReturnDataCopy(
-            wasmer_instance_context_t *ctx, uint32_t dataOffset, uint32_t offset, uint32_t size)
+        own wasm_trap_t *eeiReturnDataCopy(
+            void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto dataOffset = (uint32_t)args->data[0].of.i32;
+            auto offset = (uint32_t)args->data[1].of.i32;
+            auto size = (uint32_t)args->data[2].of.i32;
             interface->eeiReturnDataCopy(dataOffset, offset, size);
+            return NULL;
         }
-        void beiReturnDataCopy(
-            wasmer_instance_context_t *ctx, uint32_t dataOffset)
+        own wasm_trap_t *beiReturnDataCopy(
+            void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto dataOffset = (uint32_t)args->data[0].of.i32;
             interface->eeiReturnDataCopy(dataOffset, 0, interface->eeiGetReturnDataSize());
+            return NULL;
         }
-        uint32_t eeiCreate(wasmer_instance_context_t *ctx, uint32_t valueOffset, uint32_t dataOffset,
-                           uint32_t length, uint32_t resultOffset)
+        own wasm_trap_t *eeiCreate(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->eeiCreate(valueOffset, dataOffset, length, resultOffset);
+            auto interface = getInterfaceFromEnv(env);
+            auto valueOffset = (uint32_t)args->data[0].of.i32;
+            auto dataOffset = (uint32_t)args->data[1].of.i32;
+            auto length = (uint32_t)args->data[2].of.i32;
+            auto resultOffset = (uint32_t)args->data[3].of.i32;
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->eeiCreate(valueOffset, dataOffset, length, resultOffset);
+            return NULL;
         }
-        void eeiSelfDestruct(wasmer_instance_context_t *ctx, uint32_t addressOffset)
+        own wasm_trap_t *eeiSelfDestruct(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
             interface->eeiSelfDestruct(addressOffset);
+            return NULL;
         }
-        int32_t beiRegisterAsset(wasmer_instance_context_t *ctx, uint32_t assetnameOffset, uint32_t length, uint32_t addressOffset, int32_t fungible, uint64_t total, uint32_t descriptionOffset, uint32_t descriptionLength)
+        own wasm_trap_t *beiRegisterAsset(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->beiRegisterAsset(assetnameOffset, length, addressOffset, fungible, total, descriptionOffset, descriptionLength);
+            auto interface = getInterfaceFromEnv(env);
+            auto assetnameOffset = (uint32_t)args->data[0].of.i32;
+            auto length = (uint32_t)args->data[1].of.i32;
+            auto addressOffset = (uint32_t)args->data[2].of.i32;
+            auto fungible = (int32_t)args->data[3].of.i32;
+            auto total = (uint64_t)args->data[4].of.i64;
+            auto descriptionOffset = (uint32_t)args->data[5].of.i32;
+            auto descriptionLength = (uint32_t)args->data[6].of.i32;
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->beiRegisterAsset(assetnameOffset, length, addressOffset, fungible, total, descriptionOffset, descriptionLength);
+            return NULL;
         }
-        int32_t beiIssueFungibleAsset(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t amount)
+        own wasm_trap_t *beiIssueFungibleAsset(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->beiIssueFungibleAsset(addressOffset, assetnameOffset, length, amount);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
+            auto assetnameOffset = (uint32_t)args->data[1].of.i32;
+            auto length = (uint32_t)args->data[2].of.i32;
+            auto amount = (uint64_t)args->data[3].of.i64;
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->beiIssueFungibleAsset(addressOffset, assetnameOffset, length, amount);
+            return NULL;
         }
-        uint64_t beiIssueNotFungibleAsset(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t uriOffset, uint32_t uriLength)
+        own wasm_trap_t *beiIssueNotFungibleAsset(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->beiIssueNotFungibleAsset(addressOffset, assetnameOffset, length, uriOffset, uriLength);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
+            auto assetnameOffset = (uint32_t)args->data[1].of.i32;
+            auto length = (uint32_t)args->data[2].of.i32;
+            auto uriOffset = (uint32_t)args->data[3].of.i32;
+            auto uriLength = (uint32_t)args->data[4].of.i32;
+            results->data[0].kind = WASM_I64;
+            results->data[0].of.i64 = (int64_t)interface->beiIssueNotFungibleAsset(addressOffset, assetnameOffset, length, uriOffset, uriLength);
+            return NULL;
         }
-        int32_t beiTransferAsset(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t amountOrID, int32_t fromSelf)
+        own wasm_trap_t *beiTransferAsset(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->beiTransferAsset(addressOffset, assetnameOffset, length, amountOrID, fromSelf);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
+            auto assetnameOffset = (uint32_t)args->data[1].of.i32;
+            auto length = (uint32_t)args->data[2].of.i32;
+            auto amountOrID = (uint64_t)args->data[3].of.i64;
+            auto fromSelf = (int32_t)args->data[4].of.i32;
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->beiTransferAsset(addressOffset, assetnameOffset, length, amountOrID, fromSelf);
+            return NULL;
         }
-        uint64_t beiGetAssetBalance(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length)
+        own wasm_trap_t *beiGetAssetBalance(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->beiGetAssetBalance(addressOffset, assetnameOffset, length);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
+            auto assetnameOffset = (uint32_t)args->data[1].of.i32;
+            auto length = (uint32_t)args->data[2].of.i32;
+            results->data[0].kind = WASM_I64;
+            results->data[0].of.i64 = (int64_t)interface->beiGetAssetBalance(addressOffset, assetnameOffset, length);
+            return NULL;
         }
-        int32_t beiGetNotFungibleAssetIDs(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t resultOffset, uint32_t resultLength)
+        own wasm_trap_t *beiGetNotFungibleAssetIDs(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->beiGetNotFungibleAssetIDs(addressOffset, assetnameOffset, length, resultOffset, resultLength);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
+            auto assetnameOffset = (uint32_t)args->data[1].of.i32;
+            auto length = (uint32_t)args->data[2].of.i32;
+            auto resultOffset = (uint32_t)args->data[3].of.i32;
+            auto resultLength = (uint32_t)args->data[4].of.i32;
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->beiGetNotFungibleAssetIDs(addressOffset, assetnameOffset, length, resultOffset, resultLength);
+            return NULL;
         }
-        int32_t beiGetNotFungibleAssetInfo(wasmer_instance_context_t *ctx, uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t assetID, uint32_t resultOffset, uint32_t resultLength)
+        own wasm_trap_t *beiGetNotFungibleAssetInfo(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
-            return interface->beiGetNotFungibleAssetInfo(addressOffset, assetnameOffset, length, assetID, resultOffset, resultLength);
+            auto interface = getInterfaceFromEnv(env);
+            auto addressOffset = (uint32_t)args->data[0].of.i32;
+            auto assetnameOffset = (uint32_t)args->data[1].of.i32;
+            auto length = (uint32_t)args->data[2].of.i32;
+            auto assetID = (uint64_t)args->data[3].of.i64;
+            auto resultOffset = (uint32_t)args->data[4].of.i32;
+            auto resultLength = (uint32_t)args->data[5].of.i32;
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->beiGetNotFungibleAssetInfo(addressOffset, assetnameOffset, length, assetID, resultOffset, resultLength);
+            return NULL;
         }
 #if HERA_DEBUGGING
-        void print32(wasmer_instance_context_t *, uint32_t value)
+        own wasm_trap_t *print32(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
+            auto value = (uint32_t)args->data[0].of.i32;
             HERA_DEBUG << "DEBUG print32: " << value << " " << hex << "0x" << value << dec << endl;
+            return NULL;
         }
-        void print64(wasmer_instance_context_t *, uint64_t value)
+        own wasm_trap_t *print64(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
+            auto value = (uint64_t)args->data[0].of.i64;
             HERA_DEBUG << "DEBUG print64: " << value << " " << hex << "0x" << value << dec << endl;
+            return NULL;
         }
-        void printMem(wasmer_instance_context_t *ctx, uint32_t offset, uint32_t size)
+        own wasm_trap_t *printMem(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto offset = (uint32_t)args->data[0].of.i32;
+            auto size = (uint32_t)args->data[1].of.i32;
             interface->debugPrintMem(false, offset, size);
+            return NULL;
         }
-        void printMemHex(wasmer_instance_context_t *ctx, uint32_t offset, uint32_t size)
+        own wasm_trap_t *printMemHex(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto offset = (uint32_t)args->data[0].of.i32;
+            auto size = (uint32_t)args->data[1].of.i32;
             interface->debugPrintMem(true, offset, size);
+            return NULL;
         }
-        void printStorage(wasmer_instance_context_t *ctx, uint32_t offset)
+        own wasm_trap_t *printStorage(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto offset = (uint32_t)args->data[0].of.i32;
             interface->debugPrintStorage(false, offset);
+            return NULL;
         }
-        void printStorageHex(wasmer_instance_context_t *ctx, uint32_t offset)
+        own wasm_trap_t *printStorageHex(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
-            auto interface = getInterfaceFromVontext(ctx);
+            auto interface = getInterfaceFromEnv(env);
+            auto offset = (uint32_t)args->data[0].of.i32;
             interface->debugPrintStorage(true, offset);
+            return NULL;
         }
 #endif
-        shared_ptr<vector<wasmer_import_t>> initImportes()
+        map<string, map<string, ImportFunction> > initImportes()
         {
-            wasmer_byte_array ethModule = getNameArray("ethereum");
-            shared_ptr<vector<wasmer_import_t>> imports(new vector<wasmer_import_t>(), [](auto p) {
-            // Destroy the instances we created for wasmer
-#if 0
-                wasmer_memory_destroy((wasmer_memory_t *)p->at(0).value.memory);
-                //for (size_t i = 1; i < p->size(); ++i)
-#endif
-                for (size_t i = 0; i < p->size(); ++i)
-                {
-                    wasmer_import_func_destroy((wasmer_import_func_t *)p->at(i).value.func);
-                }
-                delete p;
-            });
-
-            imports->reserve(36);
-#if 0
-            // import memory
-            wasmer_memory_t *memory = create_wasmer_memory();
-            imports->emplace_back(wasmer_import_t{getNameArray("env"), getNameArray("memory"), wasmer_import_export_kind::WASM_MEMORY, {NULL}});
-            imports->back().value.memory = memory;
-#endif
-            imports->emplace_back(
-                wasmer_import_t{ethModule, getNameArray("useGas"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiUseGas, i64, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getGasLeft"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetGasLeft, NULL, 0, i64, 1)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getAddress"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetAddress, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getExternalBalance"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetExternalBalance, i32_2, 2, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockHash"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockHash, i64_i32, 2, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getCallDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCallDataSize, NULL, 0, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("callDataCopy"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiCallDataCopy, i32_3, 3, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getCaller"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCaller, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getCallValue"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCallValue, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("codeCopy"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiCodeCopy, i32_3, 3, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getCodeSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCodeSize, NULL, 0, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("externalCodeCopy"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiExternalCodeCopy, i32_4, 4, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getExternalCodeSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetExternalCodeSize, i32, 1, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockCoinbase"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockCoinbase, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockDifficulty"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockDifficulty, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockGasLimit"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockGasLimit, NULL, 0, i64, 1)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getTxGasPrice"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetTxGasPrice, i32, 1, NULL, 0)}});
-            imports->emplace_back(
-                wasmer_import_t{ethModule, getNameArray("log"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiLog, i32_7, 7, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockNumber"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockNumber, NULL, 0, i64, 1)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getBlockTimestamp"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockTimestamp, NULL, 0, i64, 1)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getTxOrigin"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetTxOrigin, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("storageStore"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiStorageStore, i32_2, 2, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("storageLoad"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiStorageLoad, i32_2, 2, NULL, 0)}});
-            imports->emplace_back(
-                wasmer_import_t{ethModule, getNameArray("finish"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiFinish, i32_2, 2, NULL, 0)}});
-            imports->emplace_back(
-                wasmer_import_t{ethModule, getNameArray("revert"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiRevert, i32_2, 2, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("getReturnDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetReturnDataSize, NULL, 0, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("returnDataCopy"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiReturnDataCopy, i32_3, 3, NULL, 0)}});
-            imports->emplace_back(
-                wasmer_import_t{ethModule, getNameArray("create"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiCreate, i32_4, 4, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{ethModule, getNameArray("selfDestruct"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiSelfDestruct, i32, 1, NULL, 0)}});
-
-            wasmer_byte_array bcosModule = getNameArray("bcos");
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("useGas"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiUseGas, i64, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("finish"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiFinish, i32_2, 2, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getAddress"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetAddress, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCallDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCallDataSize, NULL, 0, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCallData"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetCallData, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("setStorage"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiSetStorage, i32_4, 4, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getStorage"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetStorage, i32_3, 3, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getCaller"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetCaller, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("revert"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiRevert, i32_2, 2, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getTxOrigin"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetTxOrigin, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getExternalCodeSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetExternalCodeSize, i32, 1, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getBlockNumber"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockNumber, NULL, 0, i64, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getBlockTimestamp"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetBlockTimestamp, NULL, 0, i64, 1)}});
-            imports->emplace_back(
-                wasmer_import_t{bcosModule, getNameArray("log"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiLog, i32_7, 7, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getReturnDataSize"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))eeiGetReturnDataSize, NULL, 0, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getReturnData"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiReturnDataCopy, i32_3, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("call"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiCall, i32_3, 3, i32, 1)}});
+            map<string, map<string, ImportFunction> > imports;
+            // etherum
+            const string EthereumModuleName("ethereum");
+            auto &ethereumModule = imports[EthereumModuleName];
+            {
+                auto functype_i64_0 = wasm_functype_new_1_0(wasm_valtype_new_i64());
+                ethereumModule["useGas"] = ImportFunction{functype_i64_0, beiUseGas};
+            }
+            {
+                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                ethereumModule["getGasLeft"] = ImportFunction{functype_0_i64, eeiGetGasLeft};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                ethereumModule["getAddress"] = ImportFunction{functype_i32_0, eeiGetAddress};
+            }
+            {
+                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["getExternalBalance"] = ImportFunction{functype_i32_2_0, eeiGetExternalBalance};
+            }
+            {
+                auto functype_i64_i32_i32 = wasm_functype_new_2_1(wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["getBlockHash"] = ImportFunction{functype_i64_i32_i32, eeiGetBlockHash};
+            }
+            {
+                auto functype_0_i32 = wasm_functype_new_0_1(wasm_valtype_new_i32());
+                ethereumModule["getCallDataSize"] = ImportFunction{functype_0_i32, eeiGetCallDataSize};
+            }
+            {
+                auto functype_i32_3_i32 = wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["callDataCopy"] = ImportFunction{functype_i32_3_i32, eeiCallDataCopy};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                ethereumModule["getCaller"] = ImportFunction{functype_i32_0, eeiGetCaller};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                ethereumModule["getCallValue"] = ImportFunction{functype_i32_0, eeiGetCallValue};
+            }
+            {
+                auto functype_i32_3_0 = wasm_functype_new_3_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["codeCopy"] = ImportFunction{functype_i32_3_0, eeiCodeCopy};
+            }
+            {
+                auto functype_0_i32 = wasm_functype_new_0_1(wasm_valtype_new_i32());
+                ethereumModule["getCodeSize"] = ImportFunction{functype_0_i32, eeiGetCodeSize};
+            }
+            {
+                auto functype_i32_4_0 = wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["externalCodeCopy"] = ImportFunction{functype_i32_4_0, eeiExternalCodeCopy};
+            }
+            {
+                auto functype_i32_i32 = wasm_functype_new_1_1(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["getExternalCodeSize"] = ImportFunction{functype_i32_i32, eeiGetExternalCodeSize};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                ethereumModule["getBlockCoinbase"] = ImportFunction{functype_i32_0, eeiGetBlockCoinbase};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                ethereumModule["getBlockDifficulty"] = ImportFunction{functype_i32_0, eeiGetBlockDifficulty};
+            }
+            {
+                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                ethereumModule["getBlockGasLimit"] = ImportFunction{functype_0_i64, eeiGetBlockGasLimit};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                ethereumModule["getTxGasPrice"] = ImportFunction{functype_i32_0, eeiGetTxGasPrice};
+            }
+            {
+                auto functype_i32_7_0 = wasm_functype_new_7_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["log"] = ImportFunction{functype_i32_7_0, eeiLog};
+            }
+            {
+                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                ethereumModule["getBlockNumber"] = ImportFunction{functype_0_i64, eeiGetBlockNumber};
+            }
+            {
+                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                ethereumModule["getBlockTimestamp"] = ImportFunction{functype_0_i64, eeiGetBlockTimestamp};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                ethereumModule["getTxOrigin"] = ImportFunction{functype_i32_0, eeiGetTxOrigin};
+            }
+            {
+                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["storageStore"] = ImportFunction{functype_i32_2_0, eeiStorageStore};
+            }
+            {
+                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["storageLoad"] = ImportFunction{functype_i32_2_0, eeiStorageLoad};
+            }
+            {
+                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["finish"] = ImportFunction{functype_i32_2_0, eeiFinish};
+            }
+            {
+                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["revert"] = ImportFunction{functype_i32_2_0, eeiRevert};
+            }
+            {
+                auto functype_0_i32 = wasm_functype_new_0_1(wasm_valtype_new_i32());
+                ethereumModule["getReturnDataSize"] = ImportFunction{functype_0_i32, eeiGetReturnDataSize};
+            }
+            {
+                auto functype_i32_3_0 = wasm_functype_new_3_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["returnDataCopy"] = ImportFunction{functype_i32_3_0, eeiReturnDataCopy};
+            }
+            {
+                auto functype_i32_4_0 = wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["create"] = ImportFunction{functype_i32_4_0, eeiCreate};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                ethereumModule["selfDestruct"] = ImportFunction{functype_i32_0, eeiSelfDestruct};
+            }
+            // bcos environment interface
+            auto &bcosModule = imports[BCOS_MODULE_NAME];
+            {
+                auto functype_i64_0 = wasm_functype_new_1_0(wasm_valtype_new_i64());
+                bcosModule["useGas"] = ImportFunction{functype_i64_0, beiUseGas};
+            }
+            {
+                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["finish"] = ImportFunction{functype_i32_2_0, eeiFinish};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                bcosModule["getAddress"] = ImportFunction{functype_i32_0, eeiGetAddress};
+            }
+            {
+                auto functype_0_i32 = wasm_functype_new_0_1(wasm_valtype_new_i32());
+                bcosModule["getCallDataSize"] = ImportFunction{functype_0_i32, eeiGetCallDataSize};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                bcosModule["getCallData"] = ImportFunction{functype_i32_0, beiGetCallData};
+            }
+            {
+                auto functype_i32_4_0 = wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["create"] = ImportFunction{functype_i32_4_0, eeiCreate};
+            }
+            {
+                auto functype_i32_4_0 = wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["setStorage"] = ImportFunction{functype_i32_4_0, beiSetStorage};
+            }
+            {
+                auto functype_i32_3_1 = wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["getStorage"] = ImportFunction{functype_i32_3_1, beiGetStorage};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                bcosModule["getCaller"] = ImportFunction{functype_i32_0, eeiGetCaller};
+            }
+            {
+                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["revert"] = ImportFunction{functype_i32_2_0, eeiRevert};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                bcosModule["getTxOrigin"] = ImportFunction{functype_i32_0, eeiGetTxOrigin};
+            }
+            {
+                auto functype_i32_i32 = wasm_functype_new_1_1(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["getExternalCodeSize"] = ImportFunction{functype_i32_i32, eeiGetExternalCodeSize};
+            }
+            {
+                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                bcosModule["getBlockNumber"] = ImportFunction{functype_0_i64, eeiGetBlockNumber};
+            }
+            {
+                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                bcosModule["getBlockTimestamp"] = ImportFunction{functype_0_i64, eeiGetBlockTimestamp};
+            }
+            {
+                auto functype_i32_7_0 = wasm_functype_new_7_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["log"] = ImportFunction{functype_i32_7_0, eeiLog};
+            }
+            {
+                auto functype_0_i32 = wasm_functype_new_0_1(wasm_valtype_new_i32());
+                bcosModule["getReturnDataSize"] = ImportFunction{functype_0_i32, eeiGetReturnDataSize};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                bcosModule["getReturnData"] = ImportFunction{functype_i32_0, beiReturnDataCopy};
+            }
+            {
+                auto functype_i32_3_1 = wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["call"] = ImportFunction{functype_i32_3_1, beiCall};
+            }
             // asset interfaces
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("registerAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiRegisterAsset, i32_4_i64_i32_2, 7, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("issueFungibleAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiIssueFungibleAsset, i32_3_i64, 4, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("issueNotFungibleAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiIssueNotFungibleAsset, i32_5, 5, i64, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("transferAsset"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiTransferAsset, i32_3_i64_i32, 5, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getAssetBalance"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetAssetBalance, i32_3, 3, i64, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getNotFungibleAssetIDs"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetNotFungibleAssetIDs, i32_5, 5, i32, 1)}});
-            imports->emplace_back(wasmer_import_t{bcosModule, getNameArray("getNotFungibleAssetInfo"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))beiGetNotFungibleAssetInfo, i32_3_i64_i32_2, 6, i32, 1)}});
-
+            {
+                auto functype_i32_4_i64_i32_2_1 = wasm_functype_new_7_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["registerAsset"] = ImportFunction{functype_i32_4_i64_i32_2_1, beiRegisterAsset};
+            }
+            {
+                auto functype_i32_3_i64_1_1 = wasm_functype_new_4_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32());
+                bcosModule["issueFungibleAsset"] = ImportFunction{functype_i32_3_i64_1_1, beiIssueFungibleAsset};
+            }
+            {
+                auto functype_i32_5_i64_1 = wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64());
+                bcosModule["issueNotFungibleAsset"] = ImportFunction{functype_i32_5_i64_1, beiIssueNotFungibleAsset};
+            }
+            {
+                auto functype_i32_3_i64_i32_1_1 = wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i64());
+                bcosModule["transferAsset"] = ImportFunction{functype_i32_3_i64_i32_1_1, beiTransferAsset};
+            }
+            {
+                auto functype_i32_3_i64_1 = wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64());
+                bcosModule["getAssetBalance"] = ImportFunction{functype_i32_3_i64_1, beiGetAssetBalance};
+            }
+            {
+                auto functype_i32_5_i32_1 = wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["getNotFungibleAssetIDs"] = ImportFunction{functype_i32_5_i32_1, beiGetNotFungibleAssetIDs};
+            }
+            {
+                auto functype_i32_3_i64_i32_2_i32_1 = wasm_functype_new_6_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                bcosModule["getNotFungibleAssetInfo"] = ImportFunction{functype_i32_3_i64_i32_2_i32_1, beiGetNotFungibleAssetInfo};
+            }
 #if HERA_DEBUGGING
-            wasmer_byte_array debugModule = getNameArray("debug");
-            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("print32"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))print32, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("print64"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))print64, i64, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("printMem"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))printMem, i32_2, 2, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("printMemHex"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))printMemHex, i32_2, 2, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("printStorage"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))printStorage, i32, 1, NULL, 0)}});
-            imports->emplace_back(wasmer_import_t{debugModule, getNameArray("printStorageHex"), wasmer_import_export_kind::WASM_FUNCTION, {wasmer_import_func_new((void (*)(void *))printStorageHex, i32, 1, NULL, 0)}});
+            // debug environment interface
+            const string debugModuleName("debug");
+            auto &debugModule = imports[debugModuleName];
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                debugModule["print32"] = ImportFunction{functype_i32_0, print32};
+            }
+            {
+                auto functype_i64_0 = wasm_functype_new_1_0(wasm_valtype_new_i64());
+                debugModule["print64"] = ImportFunction{functype_i64_0, print64};
+            }
+            {
+                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["printMem"] = ImportFunction{functype_i32_2_0, printMem};
+            }
+            {
+                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                ethereumModule["printMemHex"] = ImportFunction{functype_i32_2_0, printMemHex};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                debugModule["printStorage"] = ImportFunction{functype_i32_0, printStorage};
+            }
+            {
+                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                debugModule["printStorageHex"] = ImportFunction{functype_i32_0, printStorageHex};
+            }
 #endif
+
             return imports;
         }
+        map<string, map<string, ImportFunction> > GLOBAL_IMPORTS = initImportes();
     } // namespace
     static const set<string> eeiFunctions{"useGas", "getGasLeft", "getAddress", "getExternalBalance",
                                           "getBlockHash", "getCallDataSize", "callDataCopy", "getCaller", "getCallValue", "codeCopy",
@@ -549,77 +888,191 @@ namespace hera
                                           "getNotFungibleAssetInfo"};
     void WasmerEngine::verifyContract(bytes_view code)
     {
-        wasmer_module_t *module;
-        auto compile_result = wasmer_compile(&module, const_cast<uint8_t *>(code.data()), (unsigned int)code.size());
-
-        ensureCondition(compile_result == wasmer_result_t::WASMER_OK, ContractValidationFailure,
-                        "Compile wasm failed.");
-        wasmer_export_descriptors_t *exports;
-        wasmer_export_descriptors(module, &exports);
-        auto len = wasmer_export_descriptors_len(exports);
-        int isBCIExported = 1;
-        for (int i = 0; i < len; ++i)
+        wasm_engine_t *engine = wasm_engine_new();
+        wasm_store_t *store = wasm_store_new(engine);
+        wasm_byte_vec_t wasm_bytes;
+        wasm_byte_vec_new(&wasm_bytes, code.size(), (const char *)code.data());
+        wasm_module_t *module = wasm_module_new(store, &wasm_bytes);
+        if (!module)
         {
-            auto exportObj = wasmer_export_descriptors_get(exports, i);
-            auto nameBytes = wasmer_export_descriptor_name(exportObj);
-            string objectName((char *)nameBytes.bytes, nameBytes.bytes_len);
-            if (objectName == "memory")
+            wasm_store_delete(store);
+            wasm_engine_delete(engine);
+            ensureCondition(false, ContractValidationFailure, string("Compile wasm failed"));
+        }
+        wasm_exporttype_vec_t exportTypes;
+        wasm_module_exports(module, &exportTypes);
+
+        // verify exports
+        int BCIExportes = 0;
+        for (size_t i = 0; i < exportTypes.size; ++i)
+        {
+            auto name = wasm_exporttype_name(exportTypes.data[i]);
+            auto kind = wasm_externtype_kind(wasm_exporttype_type(exportTypes.data[i]));
+
+            if (strcmp("memory", name->data) == 0)
             { // multiple memories are not supported for wasmer 0.17.0
-                ensureCondition(
-                    wasmer_export_descriptor_kind(exportObj) == wasmer_import_export_kind::WASM_MEMORY,
-                    ContractValidationFailure, "\"memory\" is not pointing to memory.");
+                BCIExportes++;
+                if (kind != wasm_externkind_enum::WASM_EXTERN_MEMORY)
+                {
+                    wasm_exporttype_vec_delete(&exportTypes);
+                    wasm_module_delete(module);
+                    wasm_store_delete(store);
+                    wasm_engine_delete(engine);
+                    ensureCondition(false, ContractValidationFailure, "\"memory\" is not pointing to memory.");
+                }
             }
-            else if (objectName == "deploy" || objectName == "main" || objectName == "hash_type")
+            else if (strcmp("deploy", name->data) == 0 || strcmp("main", name->data) == 0 || strcmp("hash_type", name->data) == 0)
             {
-                isBCIExported <<= 1;
-                ensureCondition(wasmer_export_descriptor_kind(exportObj) ==
-                                    wasmer_import_export_kind::WASM_FUNCTION,
-                                ContractValidationFailure, "\"main\" is not pointing to function.");
+                BCIExportes++;
+                if (kind != wasm_externkind_enum::WASM_EXTERN_FUNC)
+                {
+                    wasm_exporttype_vec_delete(&exportTypes);
+                    wasm_module_delete(module);
+                    wasm_store_delete(store);
+                    wasm_engine_delete(engine);
+                    ensureCondition(false, ContractValidationFailure, "\"main\" is not pointing to function.");
+                }
             }
-            else if (objectName == "__data_end" || objectName == "__heap_base")
+            else if (strcmp("__data_end", name->data) == 0 || strcmp("__heap_base", name->data) == 0)
             {
-                ensureCondition(
-                    wasmer_export_descriptor_kind(exportObj) == wasmer_import_export_kind::WASM_GLOBAL,
-                    ContractValidationFailure, "__data_end/__heap_base is not pointing to global.");
+                if (kind != wasm_externkind_enum::WASM_EXTERN_GLOBAL)
+                {
+                    wasm_exporttype_vec_delete(&exportTypes);
+                    wasm_module_delete(module);
+                    wasm_store_delete(store);
+                    wasm_engine_delete(engine);
+                    ensureCondition(false, ContractValidationFailure, "__data_end/__heap_base is not pointing to global.");
+                }
             }
             else
             {
-                HERA_DEBUG << "Invalid export is " << objectName << "\n";
+                HERA_DEBUG << "Invalid export is " << name->data << "\n";
+                wasm_exporttype_vec_delete(&exportTypes);
+                wasm_module_delete(module);
+                wasm_store_delete(store);
+                wasm_engine_delete(engine);
                 ensureCondition(false, ContractValidationFailure, "Invalid export is present.");
             }
         }
-        if (isBCIExported != 1 << 3)
+        if (BCIExportes != 4)
         {
-            ensureCondition(false, ContractValidationFailure, "BCI(deploy/main/hash_type) are not all exported.");
+            wasm_exporttype_vec_delete(&exportTypes);
+            wasm_module_delete(module);
+            wasm_store_delete(store);
+            wasm_engine_delete(engine);
+            ensureCondition(false, ContractValidationFailure, "BCI(deploy/main/hash_type/memory) are not all exported.");
         }
-        wasmer_export_descriptors_destroy(exports);
-        wasmer_import_descriptors_t *imports;
-        wasmer_import_descriptors(module, &imports);
-        auto importsLength = wasmer_import_descriptors_len(imports);
+        wasm_exporttype_vec_delete(&exportTypes);
 
-        for (unsigned int i = 0; i < importsLength; ++i)
+        // verify imports
+        wasm_importtype_vec_t importTypes;
+        wasm_module_imports(module, &importTypes);
+        for (size_t i = 0; i < importTypes.size; ++i)
         {
-            auto importObj = wasmer_import_descriptors_get(imports, i);
-            auto moduleNameBytes = wasmer_import_descriptor_module_name(importObj);
-            string moduleName((char *)moduleNameBytes.bytes, moduleNameBytes.bytes_len);
+            auto moduleName = wasm_importtype_module(importTypes.data[i]);
+            auto kind = wasm_externtype_kind(wasm_importtype_type(importTypes.data[i]));
+            auto objectName = wasm_importtype_name(importTypes.data[i]);
+
 #if HERA_DEBUGGING
-            if (moduleName == "debug")
+            if (strcmp("debug", moduleName->data) == 0)
                 continue;
 #endif
-            ensureCondition(moduleName == "bcos" || moduleName == "ethereum", ContractValidationFailure,
-                            "Import from invalid namespace.");
-            auto nameBytes = wasmer_import_descriptor_name(importObj);
-            string objectName((char *)nameBytes.bytes, nameBytes.bytes_len);
-            ensureCondition(beiFunctions.count(objectName) || eeiFunctions.count(objectName),
-                            ContractValidationFailure, "Importing invalid EEI method " + objectName);
-            ensureCondition(
-                wasmer_import_descriptor_kind(importObj) == wasmer_import_export_kind::WASM_FUNCTION,
-                ContractValidationFailure, "Imported function type mismatch.");
+            if (strcmp("bcos", moduleName->data) != 0 && strcmp("ethereum", moduleName->data) != 0)
+            {
+                wasm_importtype_vec_delete(&importTypes);
+                wasm_module_delete(module);
+                wasm_store_delete(store);
+                wasm_engine_delete(engine);
+                ensureCondition(false, ContractValidationFailure, "Import from invalid namespace.");
+            }
+            auto objectNameString = string(objectName->data, objectName->size);
+            if (!beiFunctions.count(objectNameString) && !eeiFunctions.count(objectNameString))
+            {
+                wasm_importtype_vec_delete(&importTypes);
+                wasm_module_delete(module);
+                wasm_store_delete(store);
+                wasm_engine_delete(engine);
+                ensureCondition(false, ContractValidationFailure, "Importing invalid EEI method " + objectNameString);
+            }
+            if (kind != wasm_externkind_enum::WASM_EXTERN_FUNC)
+            {
+                wasm_importtype_vec_delete(&importTypes);
+                wasm_module_delete(module);
+                wasm_store_delete(store);
+                wasm_engine_delete(engine);
+                ensureCondition(false, ContractValidationFailure, "Imported function type mismatch.");
+            }
         }
-        wasmer_import_descriptors_destroy(imports);
-        wasmer_module_destroy(module);
+        wasm_importtype_vec_delete(&importTypes);
+        wasm_module_delete(module);
+        wasm_store_delete(store);
+        wasm_engine_delete(engine);
     }
 
+    wasm_extern_t *findExternByName(const char *_name, const wasm_extern_vec_t exports, const wasm_exporttype_vec_t &exportTypes)
+    {
+        int index = -1;
+        for (size_t i = 0; i < exportTypes.size; ++i)
+        {
+            auto name = wasm_exporttype_name(exportTypes.data[i]);
+            // auto type = wasm_exporttype_type(exportTypes.data[i]);
+            if (strcmp(_name, name->data) == 0)
+            {
+                index = (int)i;
+            }
+        }
+        if (index >= 0)
+        {
+            return exports.data[index];
+        }
+
+        return NULL;
+    }
+    void print_frame(wasm_frame_t *frame)
+    {
+        printf("> %p @ 0x%zx = %" PRIu32 ".0x%zx\n",
+               wasm_frame_instance(frame),
+               wasm_frame_module_offset(frame),
+               wasm_frame_func_index(frame),
+               wasm_frame_func_offset(frame));
+    }
+    string processTrap(wasm_trap_t *trap)
+    {
+        own wasm_name_t message;
+        wasm_trap_message(trap, &message);
+        string ret(message.data, message.size);
+        wasm_name_delete(&message);
+#if HERA_DEBUGGING
+        printf("Printing origin...\n");
+        own wasm_frame_t *frame = wasm_trap_origin(trap);
+        if (frame)
+        {
+            print_frame(frame);
+            wasm_frame_delete(frame);
+        }
+        else
+        {
+            printf("> Empty origin.\n");
+        }
+        printf("Printing trace...\n");
+        own wasm_frame_vec_t trace;
+        wasm_trap_trace(trap, &trace);
+        if (trace.size > 0)
+        {
+            for (size_t i = 0; i < trace.size; ++i)
+            {
+                print_frame(trace.data[i]);
+            }
+        }
+        else
+        {
+            printf("> Empty trace.\n");
+        }
+        wasm_frame_vec_delete(&trace);
+#endif
+        wasm_trap_delete(trap);
+        return ret;
+    }
     ExecutionResult WasmerEngine::execute(evmc::HostContext &context, bytes_view code,
                                           bytes_view state_code, evmc_message const &msg, bool meterInterfaceGas)
     {
@@ -628,40 +1081,119 @@ namespace hera
         // Set up interface to eei host functions
         ExecutionResult result;
         WasmerEthereumInterface interface{context, state_code, msg, result, meterInterfaceGas};
-        // Define an array containing our imports
-        auto imports = initImportes();
+
         // Instantiate a WebAssembly Instance from Wasm bytes and imports
-        wasmer_instance_t *instance = NULL;
         // TODO: check if need free code, for me it seems wasmer will free
         HERA_DEBUG << "Compile wasm code use wasmer...\n";
-        wasmer_result_t compile_result =
-            wasmer_instantiate(&instance,                                       // Our reference to our Wasm instance
-                               const_cast<uint8_t *>(code.data()),              // The bytes of the WebAssembly modules
-                               (uint32_t)code.size(),                           // The length of the bytes of the WebAssembly module
-                               static_cast<wasmer_import_t *>(imports->data()), // The Imports array the will be used
-                                                                                // as our importObject
-                               (int32_t)imports->size()                         // The number of imports in the imports array
-            );
+        wasm_engine_t *engine = wasm_engine_new();
+        wasm_store_t *store = wasm_store_new(engine);
+        wasm_byte_vec_t wasm_bytes;
+        wasm_byte_vec_new(&wasm_bytes, code.size(), (const char *)code.data());
+        wasm_module_t *module = wasm_module_new(store, &wasm_bytes);
+        if (!module)
+        {
+            wasm_store_delete(store);
+            wasm_engine_delete(engine);
+            ensureCondition(false, ContractValidationFailure, string("Compile wasm failed"));
+        }
 
-        ensureCondition(compile_result == wasmer_result_t::WASMER_OK, ContractValidationFailure,
-                        string("Compile wasm failed, ") + getWasmerErrorString());
+        wasm_importtype_vec_t importTypes;
+        wasm_module_imports(module, &importTypes);
+        vector<wasm_extern_t *> imports;
+        imports.reserve(importTypes.size);
+        vector<shared_ptr<wasm_func_t>> functions;
+        functions.reserve(importTypes.size);
+        for (size_t i = 0; i < importTypes.size; ++i)
+        {
+            auto moduleName = wasm_importtype_module(importTypes.data[i]);
+            // auto kind = wasm_externtype_kind(wasm_importtype_type(importTypes.data[i]));
+            auto objectName = wasm_importtype_name(importTypes.data[i]);
+            auto functionName = string(objectName->data, objectName->size);
 
+            if (strcmp("bcos", moduleName->data) != 0 && strcmp("ethereum", moduleName->data) != 0
+#if HERA_DEBUGGING
+                && strcmp("debug", moduleName->data) != 0
+#endif
+            )
+            {
+                wasm_importtype_vec_delete(&importTypes);
+                wasm_module_delete(module);
+                wasm_store_delete(store);
+                wasm_engine_delete(engine);
+                ensureCondition(false, ContractValidationFailure, "Import from invalid namespace.");
+                break;
+            }
+
+            auto &hostFunctions = GLOBAL_IMPORTS[string(moduleName->data, moduleName->size)];
+
+            if (hostFunctions.count(functionName))
+            {
+                auto env = (void *)&interface;
+                if (functionName == "finish" || functionName == "revert")
+                {
+                    env = (void *)&store;
+                }
+
+                wasm_func_t *host_func = wasm_func_new_with_env(store, hostFunctions[functionName].functionType, hostFunctions[functionName].function, env, NULL);
+                imports.push_back(wasm_func_as_extern(host_func));
+                functions.push_back(shared_ptr<wasm_func_t>(host_func, [](auto p ){wasm_func_delete(p);}));
+                // wasm_func_delete(host_func);
+            }
+            else
+            {
+                wasm_importtype_vec_delete(&importTypes);
+                wasm_module_delete(module);
+                wasm_store_delete(store);
+                wasm_engine_delete(engine);
+                ensureCondition(false, ContractValidationFailure, functionName + " is not a supported function");
+            }
+        }
+        wasm_importtype_vec_delete(&importTypes);
+        HERA_DEBUG << "Create wasm instance...\n";
+        wasm_extern_vec_t import_object{imports.size(), imports.data()};
         // Assert the Wasm instantion completed
-        wasmer_instance_context_data_set(instance, (void *)&interface);
-        auto ctx = wasmer_instance_context_get(instance);
-        auto memory = wasmer_instance_context_memory(ctx, 0);
-        ensureCondition(memory != NULL, InvalidMemoryAccess,
-                        string("get memory from wasmer failed, ") + getWasmerErrorString());
-        HERA_DEBUG << "wasmer memory pages is " << wasmer_memory_length(memory) << "\n";
-        ensureCondition(wasmer_memory_length(memory) >= 1, InvalidMemoryAccess,
-                        string("wasmer memory pages must greater than 1"));
-        interface.setWasmContext(ctx);
+        wasm_instance_t *instance = wasm_instance_new(store, module, &import_object, NULL);
+        if (!instance)
+        {
+            wasm_module_delete(module);
+            wasm_store_delete(store);
+            wasm_engine_delete(engine);
+            ensureCondition(false, ContractValidationFailure, "Error instantiating module");
+        }
+
+        wasm_extern_vec_t exports;
+        wasm_instance_exports(instance, &exports);
+
+        wasm_exporttype_vec_t exportTypes;
+        wasm_module_exports(module, &exportTypes);
+        // get memory
+        auto memoryExtern = findExternByName("memory", exports, exportTypes);
+        if (!memoryExtern)
+        {
+            wasm_exporttype_vec_delete(&exportTypes);
+            wasm_extern_vec_delete(&exports);
+            wasm_instance_delete(instance);
+            wasm_module_delete(module);
+            wasm_store_delete(store);
+            wasm_engine_delete(engine);
+            ensureCondition(false, InvalidMemoryAccess, string("get memory from wasmer failed"));
+        }
+        auto memory = wasm_extern_as_memory(memoryExtern);
+        HERA_DEBUG << "wasmer memory pages is " << wasm_memory_size(memory) << "\n";
+        if (wasm_memory_size(memory) == 0)
+        {
+            wasm_exporttype_vec_delete(&exportTypes);
+            wasm_extern_vec_delete(&exports);
+            wasm_instance_delete(instance);
+            wasm_module_delete(module);
+            wasm_store_delete(store);
+            wasm_engine_delete(engine);
+            ensureCondition(false, InvalidMemoryAccess, string("wasmer memory pages must greater than 1"));
+        }
+        interface.setWasmStore(store);
         interface.setWasmMemory(memory);
+
         // Call the Wasm function
-        wasmer_result_t call_result = wasmer_result_t::WASMER_ERROR;
-        wasmer_value_t results[] = {};
-        // Define our parameters (none) we are passing into the guest Wasm function call.
-        wasmer_value_t params[] = {};
         const char *callName = "main";
         if (msg.kind == EVMC_CREATE)
         {
@@ -672,49 +1204,96 @@ namespace hera
                 useSM3Hash = 1;
             }
             HERA_DEBUG << "host hash algorithm is " << (useSM3Hash ? "sm3" : "keccak256") << ", Get hash type of contract...\n";
-            wasmer_value_t hashTypeResult[1];
-            call_result = wasmer_instance_call(instance, "hash_type", params, 0, hashTypeResult, 1);
-            ensureCondition(call_result == wasmer_result_t::WASMER_OK, ContractValidationFailure,
-                            "call hash_type failed, because of " + getWasmerErrorString());
-            HERA_DEBUG << "Contract hash algorithm is " << (hashTypeResult[0].value.I32 ? "sm3\n" : "keccak256\n");
-            // 0:keccak256, 1:sm3
-            ensureCondition(hashTypeResult[0].value.I32 == useSM3Hash, ContractValidationFailure,
-                            "hash type mismatch");
+            auto hashTypeFuncExtern = findExternByName("hash_type", exports, exportTypes);
+            if (!hashTypeFuncExtern)
+            {
+                wasm_exporttype_vec_delete(&exportTypes);
+                wasm_extern_vec_delete(&exports);
+                wasm_instance_delete(instance);
+                wasm_module_delete(module);
+                wasm_store_delete(store);
+                wasm_engine_delete(engine);
+                ensureCondition(false, ContractValidationFailure, "hash type mismatch");
+            }
+            auto hashTypeFunc = wasm_extern_as_func(hashTypeFuncExtern);
+            // call hash_type
+            wasm_val_t args_val[] = {};
+            wasm_val_t results_val[1] = {WASM_INIT_VAL};
+            wasm_val_vec_t args = WASM_ARRAY_VEC(args_val);
+            wasm_val_vec_t results = WASM_ARRAY_VEC(results_val);
+            auto trap = wasm_func_call(hashTypeFunc, &args, &results);
+            wasm_func_delete(hashTypeFunc);
+            if (trap)
+            { //call hash_type failed
+                auto message = processTrap(trap);
+                wasm_exporttype_vec_delete(&exportTypes);
+                wasm_extern_vec_delete(&exports);
+                wasm_instance_delete(instance);
+                wasm_module_delete(module);
+                wasm_store_delete(store);
+                wasm_engine_delete(engine);
+                ensureCondition(false, ContractValidationFailure, "call hash_type failed, " + message);
+            }
+            HERA_DEBUG << "Contract hash algorithm is " << (results_val[0].of.i32 ? "sm3\n" : "keccak256\n");
+
+            if (results_val[0].of.i32 != useSM3Hash)
+            { // 0:keccak256, 1:sm3
+                wasm_exporttype_vec_delete(&exportTypes);
+                wasm_extern_vec_delete(&exports);
+                wasm_instance_delete(instance);
+                wasm_module_delete(module);
+                wasm_store_delete(store);
+                wasm_engine_delete(engine);
+                ensureCondition(false, ContractValidationFailure, "hash type mismatch");
+            }
         }
+        own wasm_trap_t *trap = NULL;
         try
         {
             HERA_DEBUG << "Executing contract " << callName << "...\n";
-            call_result = wasmer_instance_call(instance, // Our Wasm Instance
-                                               callName, // the name of the exported function we want to call on the guest Wasm module
-                                               params,   // Our array of parameters
-                                               0,        // The number of parameters
-                                               results,  // Our array of results
-                                               0         // The number of results
-            );
+            auto funcExtern = findExternByName(callName, exports, exportTypes);
+            if (!funcExtern)
+            {
+                wasm_exporttype_vec_delete(&exportTypes);
+                wasm_extern_vec_delete(&exports);
+                wasm_instance_delete(instance);
+                wasm_module_delete(module);
+                wasm_store_delete(store);
+                wasm_engine_delete(engine);
+                ensureCondition(false, ContractValidationFailure, "can't find main/deploy");
+            }
+            auto func = wasm_extern_as_func(funcExtern);
+
+            // call hash_type
+            wasm_val_t args_val[] = {};
+            wasm_val_t results_val[] = {};
+            wasm_val_vec_t args = WASM_ARRAY_VEC(args_val);
+            wasm_val_vec_t results = WASM_ARRAY_VEC(results_val);
+            trap = wasm_func_call(func, &args, &results);
         }
         catch (EndExecution const &)
         {
             // This exception is ignored here because we consider it to be a success.
             // It is only a clutch for POSIX style exit()
         }
-        // TODO: check if we need process wasmer_result_t
-        // ensureCondition(call_result == wasmer_result_t::WASMER_OK, EndExecution, string("Call main
-        // failed, ") + getWasmerErrorString());
         if (msg.kind == EVMC_CREATE && !result.isRevert)
         {
             result.returnValue = code;
         }
-
-        auto errorMessage = getWasmerErrorString();
-        wasmer_memory_destroy(const_cast<wasmer_memory_t *>(memory));
-        wasmer_instance_destroy(instance);
+        wasm_exporttype_vec_delete(&exportTypes);
+        wasm_extern_vec_delete(&exports);
+        wasm_instance_delete(instance);
+        wasm_module_delete(module);
+        wasm_store_delete(store);
+        wasm_engine_delete(engine);
         executionFinished();
 
-        if (call_result != wasmer_result_t::WASMER_OK)
-        {
+        if (trap)
+        { //call main/deploy failed, process trap, print frame and trace
+            auto errorMessage = processTrap(trap);
             result.isRevert = true;
             HERA_DEBUG << "call " << callName << ", error message: " << errorMessage << "\n";
-            //TODO: throw specific exception according to error message
+            // throw specific exception according to error message
             if (errorMessage.find(OUT_OF_GAS) != std::string::npos)
             {
                 HERA_DEBUG << OUT_OF_GAS << "\n";
@@ -748,7 +1327,7 @@ namespace hera
                 throw std::runtime_error("Unknown error.");
             }
         }
-#if HERA_DEBUGGING
+#if 0
         else
         { // FIXME: debug log should delete before release
             HERA_DEBUG << "Output size is " << result.returnValue.size() << ", ouput=";
@@ -759,6 +1338,7 @@ namespace hera
             HERA_DEBUG << " done\n";
         }
 #endif
+
         return result;
     };
 } // namespace hera
