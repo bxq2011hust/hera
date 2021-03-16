@@ -1252,7 +1252,7 @@ namespace hera
                 auto env = (void *)&interface;
                 if (functionName == "finish" || functionName == "revert")
                 {
-                    env = (void *)&store;
+                    env = (void *)store;
                 }
 
                 wasm_func_t *host_func = wasm_func_new_with_env(store, hostFunctions[functionName].functionType.get(), hostFunctions[functionName].function, env, NULL);
@@ -1273,9 +1273,12 @@ namespace hera
         HERA_DEBUG << "Create wasm instance...\n";
         wasm_extern_vec_t import_object{imports.size(), imports.data()};
         // Assert the Wasm instantion completed
-        wasm_instance_t *instance = wasm_instance_new(store, module, &import_object, NULL);
+        own wasm_trap_t *trap = NULL;
+        wasm_instance_t *instance = wasm_instance_new(store, module, &import_object, &trap);
         if (!instance)
         {
+            auto message = processTrap(trap);
+            HERA_DEBUG << "Create wasm instance failed, " << message << "...\n";
             wasm_module_delete(module);
             wasm_store_delete(store);
             wasm_engine_delete(engine);
@@ -1342,7 +1345,7 @@ namespace hera
             wasm_val_t results_val[1] = {WASM_INIT_VAL};
             wasm_val_vec_t args = WASM_ARRAY_VEC(args_val);
             wasm_val_vec_t results = WASM_ARRAY_VEC(results_val);
-            auto trap = wasm_func_call(hashTypeFunc, &args, &results);
+            trap = wasm_func_call(hashTypeFunc, &args, &results);
             wasm_func_delete(hashTypeFunc);
             if (trap)
             { //call hash_type failed
@@ -1368,7 +1371,7 @@ namespace hera
                 ensureCondition(false, ContractValidationFailure, "hash type mismatch");
             }
         }
-        own wasm_trap_t *trap = NULL;
+        trap = NULL;
         try
         {
             HERA_DEBUG << "Executing contract " << callName << "...\n";
