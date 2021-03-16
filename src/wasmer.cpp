@@ -43,11 +43,11 @@ namespace hera
 {
     struct ImportFunction
     {
-        ~ImportFunction()
-        {
-            wasm_functype_delete(functionType);
-        }
-        wasm_functype_t *functionType;
+        // ~ImportFunction()
+        // {
+        //     wasm_functype_delete(functionType);
+        // }
+        shared_ptr<wasm_functype_t> functionType;
         wasm_func_callback_with_env_t function;
     };
     class WasmerEthereumInterface : public EthereumInterface
@@ -623,222 +623,331 @@ namespace hera
             const string EthereumModuleName("ethereum");
             auto &ethereumModule = imports[EthereumModuleName];
             {
-                auto functype_i64_0 = wasm_functype_new_1_0(wasm_valtype_new_i64());
+                auto functype_i64_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["useGas"] = ImportFunction{functype_i64_0, beiUseGas};
             }
             {
-                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                auto functype_0_i64 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getGasLeft"] = ImportFunction{functype_0_i64, eeiGetGasLeft};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getAddress"] = ImportFunction{functype_i32_0, eeiGetAddress};
             }
             {
-                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_2_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getExternalBalance"] = ImportFunction{functype_i32_2_0, eeiGetExternalBalance};
             }
             {
-                auto functype_i64_i32_i32 = wasm_functype_new_2_1(wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i64_i32_i32 = shared_ptr<wasm_functype_t>(wasm_functype_new_2_1(wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getBlockHash"] = ImportFunction{functype_i64_i32_i32, eeiGetBlockHash};
             }
             {
-                auto functype_0_i32 = wasm_functype_new_0_1(wasm_valtype_new_i32());
+                auto functype_0_i32 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getCallDataSize"] = ImportFunction{functype_0_i32, eeiGetCallDataSize};
             }
             {
-                auto functype_i32_3_i32 = wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+
+                auto functype_i32_3_i32 = shared_ptr<wasm_functype_t>(wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["callDataCopy"] = ImportFunction{functype_i32_3_i32, eeiCallDataCopy};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getCaller"] = ImportFunction{functype_i32_0, eeiGetCaller};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getCallValue"] = ImportFunction{functype_i32_0, eeiGetCallValue};
             }
             {
-                auto functype_i32_3_0 = wasm_functype_new_3_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_3_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_3_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["codeCopy"] = ImportFunction{functype_i32_3_0, eeiCodeCopy};
             }
             {
-                auto functype_0_i32 = wasm_functype_new_0_1(wasm_valtype_new_i32());
+                auto functype_0_i32 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getCodeSize"] = ImportFunction{functype_0_i32, eeiGetCodeSize};
             }
             {
-                auto functype_i32_4_0 = wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_4_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["externalCodeCopy"] = ImportFunction{functype_i32_4_0, eeiExternalCodeCopy};
             }
             {
-                auto functype_i32_i32 = wasm_functype_new_1_1(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_i32 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_1(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getExternalCodeSize"] = ImportFunction{functype_i32_i32, eeiGetExternalCodeSize};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getBlockCoinbase"] = ImportFunction{functype_i32_0, eeiGetBlockCoinbase};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getBlockDifficulty"] = ImportFunction{functype_i32_0, eeiGetBlockDifficulty};
             }
             {
-                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                auto functype_0_i64 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getBlockGasLimit"] = ImportFunction{functype_0_i64, eeiGetBlockGasLimit};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getTxGasPrice"] = ImportFunction{functype_i32_0, eeiGetTxGasPrice};
             }
             {
-                auto functype_i32_7_0 = wasm_functype_new_7_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_7_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_7_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["log"] = ImportFunction{functype_i32_7_0, eeiLog};
             }
             {
-                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                auto functype_0_i64 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getBlockNumber"] = ImportFunction{functype_0_i64, eeiGetBlockNumber};
             }
             {
-                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                auto functype_0_i64 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getBlockTimestamp"] = ImportFunction{functype_0_i64, eeiGetBlockTimestamp};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getTxOrigin"] = ImportFunction{functype_i32_0, eeiGetTxOrigin};
             }
             {
-                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_2_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["storageStore"] = ImportFunction{functype_i32_2_0, eeiStorageStore};
             }
             {
-                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_2_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["storageLoad"] = ImportFunction{functype_i32_2_0, eeiStorageLoad};
             }
             {
-                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_2_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["finish"] = ImportFunction{functype_i32_2_0, eeiFinish};
             }
             {
-                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_2_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["revert"] = ImportFunction{functype_i32_2_0, eeiRevert};
             }
             {
-                auto functype_0_i32 = wasm_functype_new_0_1(wasm_valtype_new_i32());
+                auto functype_0_i32 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["getReturnDataSize"] = ImportFunction{functype_0_i32, eeiGetReturnDataSize};
             }
             {
-                auto functype_i32_3_0 = wasm_functype_new_3_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_3_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_3_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["returnDataCopy"] = ImportFunction{functype_i32_3_0, eeiReturnDataCopy};
             }
             {
-                auto functype_i32_4_0 = wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_4_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["create"] = ImportFunction{functype_i32_4_0, eeiCreate};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["selfDestruct"] = ImportFunction{functype_i32_0, eeiSelfDestruct};
             }
             // bcos environment interface
             auto &bcosModule = imports[BCOS_MODULE_NAME];
             {
-                auto functype_i64_0 = wasm_functype_new_1_0(wasm_valtype_new_i64());
+                auto functype_i64_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["useGas"] = ImportFunction{functype_i64_0, beiUseGas};
             }
             {
-                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_2_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["finish"] = ImportFunction{functype_i32_2_0, eeiFinish};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getAddress"] = ImportFunction{functype_i32_0, eeiGetAddress};
             }
             {
-                auto functype_0_i32 = wasm_functype_new_0_1(wasm_valtype_new_i32());
+                auto functype_0_i32 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getCallDataSize"] = ImportFunction{functype_0_i32, eeiGetCallDataSize};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getCallData"] = ImportFunction{functype_i32_0, beiGetCallData};
             }
             {
-                auto functype_i32_4_0 = wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_4_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["create"] = ImportFunction{functype_i32_4_0, eeiCreate};
             }
             {
-                auto functype_i32_4_0 = wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_4_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_4_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["setStorage"] = ImportFunction{functype_i32_4_0, beiSetStorage};
             }
             {
-                auto functype_i32_3_1 = wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_3_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getStorage"] = ImportFunction{functype_i32_3_1, beiGetStorage};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getCaller"] = ImportFunction{functype_i32_0, eeiGetCaller};
             }
             {
-                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_2_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["revert"] = ImportFunction{functype_i32_2_0, eeiRevert};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getTxOrigin"] = ImportFunction{functype_i32_0, eeiGetTxOrigin};
             }
             {
-                auto functype_i32_i32 = wasm_functype_new_1_1(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_i32 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_1(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getExternalCodeSize"] = ImportFunction{functype_i32_i32, eeiGetExternalCodeSize};
             }
             {
-                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                auto functype_0_i64 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getBlockNumber"] = ImportFunction{functype_0_i64, eeiGetBlockNumber};
             }
             {
-                auto functype_0_i64 = wasm_functype_new_0_1(wasm_valtype_new_i64());
+                auto functype_0_i64 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getBlockTimestamp"] = ImportFunction{functype_0_i64, eeiGetBlockTimestamp};
             }
             {
-                auto functype_i32_7_0 = wasm_functype_new_7_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_7_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_7_0(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["log"] = ImportFunction{functype_i32_7_0, eeiLog};
             }
             {
-                auto functype_0_i32 = wasm_functype_new_0_1(wasm_valtype_new_i32());
+                auto functype_0_i32 = shared_ptr<wasm_functype_t>(wasm_functype_new_0_1(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getReturnDataSize"] = ImportFunction{functype_0_i32, eeiGetReturnDataSize};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getReturnData"] = ImportFunction{functype_i32_0, beiReturnDataCopy};
             }
             {
-                auto functype_i32_3_1 = wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_3_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["call"] = ImportFunction{functype_i32_3_1, beiCall};
             }
             // asset interfaces
             {
-                auto functype_i32_4_i64_i32_2_1 = wasm_functype_new_7_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_4_i64_i32_2_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_7_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["registerAsset"] = ImportFunction{functype_i32_4_i64_i32_2_1, beiRegisterAsset};
             }
             {
-                auto functype_i32_3_i64_1_1 = wasm_functype_new_4_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32());
+                auto functype_i32_3_i64_1_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_4_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["issueFungibleAsset"] = ImportFunction{functype_i32_3_i64_1_1, beiIssueFungibleAsset};
             }
             {
-                auto functype_i32_5_i64_1 = wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64());
+                auto functype_i32_5_i64_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["issueNotFungibleAsset"] = ImportFunction{functype_i32_5_i64_1, beiIssueNotFungibleAsset};
             }
             {
-                auto functype_i32_3_i64_i32_1_1 = wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i64());
+                auto functype_i32_3_i64_i32_1_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["transferAsset"] = ImportFunction{functype_i32_3_i64_i32_1_1, beiTransferAsset};
             }
             {
-                auto functype_i32_3_i64_1 = wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64());
+                auto functype_i32_3_i64_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_3_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getAssetBalance"] = ImportFunction{functype_i32_3_i64_1, beiGetAssetBalance};
             }
             {
-                auto functype_i32_5_i32_1 = wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_5_i32_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getNotFungibleAssetIDs"] = ImportFunction{functype_i32_5_i32_1, beiGetNotFungibleAssetIDs};
             }
             {
-                auto functype_i32_3_i64_i32_2_i32_1 = wasm_functype_new_6_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_3_i64_i32_2_i32_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_6_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 bcosModule["getNotFungibleAssetInfo"] = ImportFunction{functype_i32_3_i64_i32_2_i32_1, beiGetNotFungibleAssetInfo};
             }
 #if HERA_DEBUGGING
@@ -846,27 +955,39 @@ namespace hera
             const string debugModuleName("debug");
             auto &debugModule = imports[debugModuleName];
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 debugModule["print32"] = ImportFunction{functype_i32_0, print32};
             }
             {
-                auto functype_i64_0 = wasm_functype_new_1_0(wasm_valtype_new_i64());
+                auto functype_i64_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i64()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 debugModule["print64"] = ImportFunction{functype_i64_0, print64};
             }
             {
-                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_2_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["printMem"] = ImportFunction{functype_i32_2_0, printMem};
             }
             {
-                auto functype_i32_2_0 = wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32());
+                auto functype_i32_2_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_2_0(wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 ethereumModule["printMemHex"] = ImportFunction{functype_i32_2_0, printMemHex};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 debugModule["printStorage"] = ImportFunction{functype_i32_0, printStorage};
             }
             {
-                auto functype_i32_0 = wasm_functype_new_1_0(wasm_valtype_new_i32());
+                auto functype_i32_0 = shared_ptr<wasm_functype_t>(wasm_functype_new_1_0(wasm_valtype_new_i32()), [](auto p) {
+                    wasm_functype_delete(p);
+                });
                 debugModule["printStorageHex"] = ImportFunction{functype_i32_0, printStorageHex};
             }
 #endif
@@ -1101,7 +1222,7 @@ namespace hera
         wasm_module_imports(module, &importTypes);
         vector<wasm_extern_t *> imports;
         imports.reserve(importTypes.size);
-        vector<shared_ptr<wasm_func_t>> functions;
+        vector<shared_ptr<wasm_func_t> > functions;
         functions.reserve(importTypes.size);
         for (size_t i = 0; i < importTypes.size; ++i)
         {
@@ -1134,9 +1255,9 @@ namespace hera
                     env = (void *)&store;
                 }
 
-                wasm_func_t *host_func = wasm_func_new_with_env(store, hostFunctions[functionName].functionType, hostFunctions[functionName].function, env, NULL);
+                wasm_func_t *host_func = wasm_func_new_with_env(store, hostFunctions[functionName].functionType.get(), hostFunctions[functionName].function, env, NULL);
                 imports.push_back(wasm_func_as_extern(host_func));
-                functions.push_back(shared_ptr<wasm_func_t>(host_func, [](auto p ){wasm_func_delete(p);}));
+                functions.push_back(shared_ptr<wasm_func_t>(host_func, [](auto p) { wasm_func_delete(p); }));
                 // wasm_func_delete(host_func);
             }
             else
