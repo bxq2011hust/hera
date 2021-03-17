@@ -455,7 +455,8 @@ namespace hera
             auto addressOffset = (uint32_t)args->data[0].of.i32;
             auto dataOffset = (uint32_t)args->data[1].of.i32;
             auto dataLength = (uint32_t)args->data[2].of.i32;
-            interface->eeiCall(EthereumInterface::EEICallKind::Call, interface->eeiGetGasLeft(), addressOffset, 0, dataOffset, dataLength);
+            results->data[0].kind = WASM_I32;
+            results->data[0].of.i32 = (int32_t)interface->eeiCall(EthereumInterface::EEICallKind::Call, interface->eeiGetGasLeft(), addressOffset, 0, dataOffset, dataLength);
             return NULL;
         }
         own wasm_trap_t *eeiGetReturnDataSize(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
@@ -1150,8 +1151,7 @@ namespace hera
         {
             auto name = wasm_exporttype_name(exportTypes.data[i]);
             string objectName((char *)name->data, name->size);
-            // auto type = wasm_exporttype_type(exportTypes.data[i]);
-            HERA_DEBUG << "exports have " << objectName << "\n";
+            // HERA_DEBUG << "exports have " << objectName << "\n";
             if (objectName == targetName)
             {
                 index = (int)i;
@@ -1473,6 +1473,7 @@ namespace hera
             }
             else
             {
+                HERA_DEBUG << "Unknown error. " << get_last_wasmer_error() <<"\n";
                 throw std::runtime_error("Unknown error.");
             }
         }
