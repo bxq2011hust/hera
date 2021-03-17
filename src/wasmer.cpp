@@ -77,9 +77,9 @@ namespace hera
         {
             return m_result.gasLeft;
         }
-        own wasm_trap_t *beiRevertOrFinish(void *env, bool revert, uint32_t offset, uint32_t size)
+        own wasm_trap_t *beiRevertOrFinish(bool revert, uint32_t offset, uint32_t size)
         {
-            HERA_DEBUG << (revert ? "revert " : "finish ") << hex << offset << " " << size << dec << "\n";
+            HERA_DEBUG << (revert ? "revert " : "finish ") << hex << memorySize() << " " << offset << " " << size << dec << "\n";
 
             if (size != 0)
             {
@@ -98,7 +98,7 @@ namespace hera
             {
                 wasm_name_new_from_string_nt(&message, FINISH);
             }
-            own wasm_trap_t *trap = wasm_trap_new((wasm_store_t *)env, &message);
+            own wasm_trap_t *trap = wasm_trap_new((wasm_store_t *)m_wasmStore, &message);
             wasm_name_delete(&message);
             return trap;
         }
@@ -247,7 +247,7 @@ namespace hera
         {
             auto interface = getInterfaceFromEnv(env);
             auto addressOffset = (uint32_t)args->data[0].of.i32;
-            auto resultOffset = (uint32_t)args->data[0].of.i32;
+            auto resultOffset = (uint32_t)args->data[1].of.i32;
             interface->eeiGetExternalBalance(addressOffset, resultOffset);
             return NULL;
         }
@@ -256,7 +256,7 @@ namespace hera
         {
             auto interface = getInterfaceFromEnv(env);
             auto number = (uint64_t)args->data[0].of.i64;
-            auto resultOffset = (uint32_t)args->data[0].of.i32;
+            auto resultOffset = (uint32_t)args->data[1].of.i32;
             results->data[0].kind = WASM_I32;
             results->data[0].of.i32 = (int32_t)interface->eeiGetBlockHash(number, resultOffset);
             return NULL;
@@ -362,9 +362,9 @@ namespace hera
             auto length = (uint32_t)args->data[1].of.i32;
             auto numberOfTopics = (uint32_t)args->data[2].of.i32;
             auto topic1 = (uint32_t)args->data[3].of.i32;
-            auto topic2 = (uint32_t)args->data[3].of.i32;
-            auto topic3 = (uint32_t)args->data[3].of.i32;
-            auto topic4 = (uint32_t)args->data[3].of.i32;
+            auto topic2 = (uint32_t)args->data[4].of.i32;
+            auto topic3 = (uint32_t)args->data[5].of.i32;
+            auto topic4 = (uint32_t)args->data[6].of.i32;
             interface->eeiLog(dataOffset, length, numberOfTopics, topic1, topic2, topic3, topic4);
             return NULL;
         }
@@ -440,14 +440,14 @@ namespace hera
             auto interface = getInterfaceFromEnv(env);
             auto offset = (uint32_t)args->data[0].of.i32;
             auto size = (uint32_t)args->data[1].of.i32;
-            return interface->beiRevertOrFinish(env, false, offset, size);
+            return interface->beiRevertOrFinish(false, offset, size);
         }
         own wasm_trap_t *eeiRevert(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
             auto interface = getInterfaceFromEnv(env);
             auto offset = (uint32_t)args->data[0].of.i32;
             auto size = (uint32_t)args->data[1].of.i32;
-            return interface->beiRevertOrFinish(env, true, offset, size);
+            return interface->beiRevertOrFinish(true, offset, size);
         }
         own wasm_trap_t *beiCall(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
@@ -1143,13 +1143,13 @@ namespace hera
         wasm_engine_delete(engine);
     }
 
-    wasm_extern_t *findExternByName(const string& targetName, const wasm_extern_vec_t exports, const wasm_exporttype_vec_t &exportTypes)
+    wasm_extern_t *findExternByName(const string &targetName, const wasm_extern_vec_t exports, const wasm_exporttype_vec_t &exportTypes)
     {
         int index = -1;
         for (size_t i = 0; i < exportTypes.size; ++i)
         {
             auto name = wasm_exporttype_name(exportTypes.data[i]);
-            string objectName((char *)name->data,name->size);
+            string objectName((char *)name->data, name->size);
             // auto type = wasm_exporttype_type(exportTypes.data[i]);
             HERA_DEBUG << "exports have " << objectName << "\n";
             if (objectName == targetName)
@@ -1265,11 +1265,6 @@ namespace hera
             if (hostFunctions.count(functionName))
             {
                 auto env = (void *)&interface;
-                if (functionName == "finish" || functionName == "revert")
-                {
-                    env = (void *)store;
-                }
-
                 wasm_func_t *host_func = wasm_func_new_with_env(store, hostFunctions[functionName].functionType.get(), hostFunctions[functionName].function, env, NULL);
                 if (!host_func)
                 {
