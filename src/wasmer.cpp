@@ -41,6 +41,14 @@ const string ETHEREUM_MODULE_NAME = "ethereum";
 
 namespace hera
 {
+    // Use the last_error API to retrieve error messages
+    string get_last_wasmer_error()
+    {
+        int error_len = wasmer_last_error_length();
+        string errorMessage((size_t)error_len, '\0');
+        wasmer_last_error_message(const_cast<char *>(errorMessage.data()), error_len);
+        return errorMessage;
+    }
     struct ImportFunction
     {
         // ~ImportFunction()
@@ -1271,6 +1279,7 @@ namespace hera
                 }
                 imports.push_back(wasm_func_as_extern(host_func));
                 functions.push_back(shared_ptr<wasm_func_t>(host_func, [](auto p) { wasm_func_delete(p); }));
+                HERA_DEBUG << i << " " << string(moduleName->data, moduleName->size) << "::" << functionName << " imported\n";
             }
             else
             {
@@ -1289,12 +1298,20 @@ namespace hera
         wasm_instance_t *instance = wasm_instance_new(store, module, &import_object, &trap);
         if (!instance)
         {
-            auto message = processTrap(trap);
+            string message;
+            if (trap)
+            {
+                message = processTrap(trap);
+            }
+            else
+            {
+                message = get_last_wasmer_error();
+            }
             HERA_DEBUG << "Create wasm instance failed, " << message << "...\n";
             wasm_module_delete(module);
             wasm_store_delete(store);
             wasm_engine_delete(engine);
-            ensureCondition(false, ContractValidationFailure, "Error instantiating module");
+            ensureCondition(false, ContractValidationFailure, "Error instantiating wasm");
         }
 
         wasm_extern_vec_t exports;
@@ -1383,7 +1400,6 @@ namespace hera
                 ensureCondition(false, ContractValidationFailure, "hash type mismatch");
             }
         }
-        trap = NULL;
         try
         {
             HERA_DEBUG << "Executing contract " << callName << "...\n";
@@ -1400,7 +1416,7 @@ namespace hera
             }
             auto func = wasm_extern_as_func(funcExtern);
 
-            // call hash_type
+            // call
             wasm_val_t args_val[] = {};
             wasm_val_t results_val[] = {};
             wasm_val_vec_t args = WASM_ARRAY_VEC(args_val);
