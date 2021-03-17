@@ -1043,7 +1043,7 @@ namespace hera
             auto name = wasm_exporttype_name(exportTypes.data[i]);
             auto kind = wasm_externtype_kind(wasm_exporttype_type(exportTypes.data[i]));
 
-            if (strcmp("memory", name->data) == 0)
+            if (strncmp("memory", name->data, strlen("memory")) == 0)
             { // multiple memories are not supported for wasmer 0.17.0
                 BCIExportes++;
                 if (kind != wasm_externkind_enum::WASM_EXTERN_MEMORY)
@@ -1055,7 +1055,7 @@ namespace hera
                     ensureCondition(false, ContractValidationFailure, "\"memory\" is not pointing to memory.");
                 }
             }
-            else if (strcmp("deploy", name->data) == 0 || strcmp("main", name->data) == 0 || strcmp("hash_type", name->data) == 0)
+            else if (strncmp("deploy", name->data, strlen("deploy")) == 0 || strncmp("main", name->data, strlen("main")) == 0 || strncmp("hash_type", name->data, strlen("hash_type")) == 0)
             {
                 BCIExportes++;
                 if (kind != wasm_externkind_enum::WASM_EXTERN_FUNC)
@@ -1067,7 +1067,7 @@ namespace hera
                     ensureCondition(false, ContractValidationFailure, "\"main\" is not pointing to function.");
                 }
             }
-            else if (strcmp("__data_end", name->data) == 0 || strcmp("__heap_base", name->data) == 0)
+            else if (strncmp("__data_end", name->data, strlen("__data_end")) == 0 || strncmp("__heap_base", name->data, strlen("__heap_base")) == 0)
             {
                 if (kind != wasm_externkind_enum::WASM_EXTERN_GLOBAL)
                 {
@@ -1108,10 +1108,10 @@ namespace hera
             auto objectName = wasm_importtype_name(importTypes.data[i]);
 
 #if HERA_DEBUGGING
-            if (strcmp("debug", moduleName->data) == 0)
+            if (strncmp("debug", moduleName->data, strlen("debug")) == 0)
                 continue;
 #endif
-            if (strcmp("bcos", moduleName->data) != 0 && strcmp("ethereum", moduleName->data) != 0)
+            if (strncmp("bcos", moduleName->data, strlen("bcos")) != 0 && strncmp("ethereum", moduleName->data, strlen("ethereum")) != 0)
             {
                 wasm_importtype_vec_delete(&importTypes);
                 wasm_module_delete(module);
@@ -1246,9 +1246,9 @@ namespace hera
             auto objectName = wasm_importtype_name(importTypes.data[i]);
             auto functionName = string(objectName->data, objectName->size);
 
-            if (strcmp("bcos", moduleName->data) != 0 && strcmp("ethereum", moduleName->data) != 0
+            if (strncmp("bcos", moduleName->data, strlen("bcos")) != 0 && strncmp("ethereum", moduleName->data, strlen("ethereum")) != 0
 #if HERA_DEBUGGING
-                && strcmp("debug", moduleName->data) != 0
+                && strncmp("debug", moduleName->data, strlen("debug")) != 0
 #endif
             )
             {
