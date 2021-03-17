@@ -73,9 +73,12 @@ namespace hera
         {
             HERA_DEBUG << (revert ? "revert " : "finish ") << hex << offset << " " << size << dec << "\n";
 
-            ensureSourceMemoryBounds(offset, size);
-            m_result.returnValue = bytes(size, '\0');
-            loadMemory(offset, m_result.returnValue, size);
+            if (size != 0)
+            {
+                ensureSourceMemoryBounds(offset, size);
+                m_result.returnValue = bytes(size, '\0');
+                loadMemory(offset, m_result.returnValue, size);
+            }
 
             m_result.isRevert = revert;
             own wasm_name_t message;
@@ -132,9 +135,10 @@ namespace hera
         static inline own wasm_functype_t *wasm_functype_new_4_0(
             own wasm_valtype_t *p1, own wasm_valtype_t *p2, own wasm_valtype_t *p3, own wasm_valtype_t *p4)
         {
-            wasm_valtype_vec_t params, results;
             wasm_valtype_t *ps[4] = {p1, p2, p3, p4};
+            wasm_valtype_vec_t params, results;
             wasm_valtype_vec_new(&params, 4, ps);
+            wasm_valtype_vec_new_empty(&results);
             return wasm_functype_new(&params, &results);
         }
         static inline own wasm_functype_t *wasm_functype_new_7_0(
@@ -143,6 +147,7 @@ namespace hera
             wasm_valtype_vec_t params, results;
             wasm_valtype_t *ps[7] = {p1, p2, p3, p4, p5, p6, p7};
             wasm_valtype_vec_new(&params, 7, ps);
+            wasm_valtype_vec_new_empty(&results);
             return wasm_functype_new(&params, &results);
         }
         static inline own wasm_functype_t *wasm_functype_new_4_1(
@@ -1256,9 +1261,16 @@ namespace hera
                 }
 
                 wasm_func_t *host_func = wasm_func_new_with_env(store, hostFunctions[functionName].functionType.get(), hostFunctions[functionName].function, env, NULL);
+                if (!host_func)
+                {
+                    wasm_importtype_vec_delete(&importTypes);
+                    wasm_module_delete(module);
+                    wasm_store_delete(store);
+                    wasm_engine_delete(engine);
+                    ensureCondition(false, ContractValidationFailure, functionName + " import failed.");
+                }
                 imports.push_back(wasm_func_as_extern(host_func));
                 functions.push_back(shared_ptr<wasm_func_t>(host_func, [](auto p) { wasm_func_delete(p); }));
-                // wasm_func_delete(host_func);
             }
             else
             {
@@ -1337,7 +1349,7 @@ namespace hera
                 wasm_module_delete(module);
                 wasm_store_delete(store);
                 wasm_engine_delete(engine);
-                ensureCondition(false, ContractValidationFailure, "hash type mismatch");
+                ensureCondition(false, ContractValidationFailure, "get hash function failed");
             }
             auto hashTypeFunc = wasm_extern_as_func(hashTypeFuncExtern);
             // call hash_type
