@@ -232,7 +232,7 @@ namespace hera
         {
             auto interface = getInterfaceFromEnv(env);
             results->data[0].kind = WASM_I64;
-            results->data[1].of.i64 = (int64_t)interface->eeiGetGasLeft();
+            results->data[0].of.i64 = (int64_t)interface->eeiGetGasLeft();
             return NULL;
         }
         own wasm_trap_t *eeiGetAddress(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
@@ -258,14 +258,14 @@ namespace hera
             auto number = (uint64_t)args->data[0].of.i64;
             auto resultOffset = (uint32_t)args->data[0].of.i32;
             results->data[0].kind = WASM_I32;
-            results->data[1].of.i32 = (int32_t)interface->eeiGetBlockHash(number, resultOffset);
+            results->data[0].of.i32 = (int32_t)interface->eeiGetBlockHash(number, resultOffset);
             return NULL;
         }
         own wasm_trap_t *eeiGetCallDataSize(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
         {
             auto interface = getInterfaceFromEnv(env);
             results->data[0].kind = WASM_I32;
-            results->data[1].of.i32 = (int32_t)interface->eeiGetCallDataSize();
+            results->data[0].of.i32 = (int32_t)interface->eeiGetCallDataSize();
             return NULL;
         }
         own wasm_trap_t *eeiCallDataCopy(
@@ -940,7 +940,7 @@ namespace hera
                 bcosModule["issueNotFungibleAsset"] = ImportFunction{functype_i32_5_i64_1, beiIssueNotFungibleAsset};
             }
             {
-                auto functype_i32_3_i64_i32_1_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i64()), [](auto p) {
+                auto functype_i32_3_i64_i32_1_1 = shared_ptr<wasm_functype_t>(wasm_functype_new_5_1(wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i32(), wasm_valtype_new_i64(), wasm_valtype_new_i32(), wasm_valtype_new_i32()), [](auto p) {
                     wasm_functype_delete(p);
                 });
                 bcosModule["transferAsset"] = ImportFunction{functype_i32_3_i64_i32_1_1, beiTransferAsset};
@@ -1143,14 +1143,16 @@ namespace hera
         wasm_engine_delete(engine);
     }
 
-    wasm_extern_t *findExternByName(const char *_name, const wasm_extern_vec_t exports, const wasm_exporttype_vec_t &exportTypes)
+    wasm_extern_t *findExternByName(const string& targetName, const wasm_extern_vec_t exports, const wasm_exporttype_vec_t &exportTypes)
     {
         int index = -1;
         for (size_t i = 0; i < exportTypes.size; ++i)
         {
             auto name = wasm_exporttype_name(exportTypes.data[i]);
+            string objectName((char *)name->data,name->size);
             // auto type = wasm_exporttype_type(exportTypes.data[i]);
-            if (strcmp(_name, name->data) == 0)
+            HERA_DEBUG << "exports have " << objectName << "\n";
+            if (objectName == targetName)
             {
                 index = (int)i;
             }
@@ -1177,7 +1179,7 @@ namespace hera
         string ret(message.data, message.size);
         wasm_name_delete(&message);
 #if HERA_DEBUGGING
-        printf("Printing origin...\n");
+        HERA_DEBUG << "Printing origin...\n";
         own wasm_frame_t *frame = wasm_trap_origin(trap);
         if (frame)
         {
@@ -1188,7 +1190,7 @@ namespace hera
         {
             printf("> Empty origin.\n");
         }
-        printf("Printing trace...\n");
+        HERA_DEBUG << "Printing trace...\n";
         own wasm_frame_vec_t trace;
         wasm_trap_trace(trap, &trace);
         if (trace.size > 0)
@@ -1200,7 +1202,7 @@ namespace hera
         }
         else
         {
-            printf("> Empty trace.\n");
+            HERA_DEBUG << "> Empty trace.\n";
         }
         wasm_frame_vec_delete(&trace);
 #endif
