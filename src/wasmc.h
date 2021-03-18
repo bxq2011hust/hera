@@ -16,7 +16,7 @@
 #include "eei.h"
 #include <memory>
 namespace hera {
-class WasmerEngine : public WasmEngine {
+class WasmcEngine : public WasmEngine {
 public:
   /// Factory method to create the WABT Wasm Engine.
   static std::unique_ptr<WasmEngine> create();

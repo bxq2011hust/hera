@@ -11,8 +11,7 @@
  * limitations under the License.
  */
 
-#include "wasmer.h"
-#include "c-api/wasmer_wasm.h"
+#include "wasmc.h"
 #include "debugging.h"
 #include <cstdio>
 #include <cstdlib>
@@ -24,7 +23,11 @@
 #include <vector>
 #include <set>
 #include <map>
-
+#if HERA_WASMER
+#include "c-api/wasmer_wasm.h"
+#else
+#include "wasmtime.h"
+#endif
 #define own
 
 using namespace std;
@@ -41,6 +44,7 @@ const string ETHEREUM_MODULE_NAME = "ethereum";
 
 namespace hera
 {
+    #if HERA_WASMER
     // Use the last_error API to retrieve error messages
     string get_last_wasmer_error()
     {
@@ -49,6 +53,7 @@ namespace hera
         wasmer_last_error_message(const_cast<char *>(errorMessage.data()), error_len);
         return errorMessage;
     }
+    #endif
     struct ImportFunction
     {
         // ~ImportFunction()
@@ -58,10 +63,10 @@ namespace hera
         shared_ptr<wasm_functype_t> functionType;
         wasm_func_callback_with_env_t function;
     };
-    class WasmerEthereumInterface : public EthereumInterface
+    class WasmcInterface : public EthereumInterface
     {
     public:
-        explicit WasmerEthereumInterface(evmc::HostContext &_context, bytes_view _code,
+        explicit WasmcInterface(evmc::HostContext &_context, bytes_view _code,
                                          evmc_message const &_msg, ExecutionResult &_result, bool _meterGas)
             : EthereumInterface(_context, _code, _msg, _result, _meterGas)
         {
@@ -133,9 +138,9 @@ namespace hera
         wasm_store_t *m_wasmStore = nullptr;
     };
 
-    unique_ptr<WasmEngine> WasmerEngine::create()
+    unique_ptr<WasmEngine> WasmcEngine::create()
     {
-        return unique_ptr<WasmEngine>{new WasmerEngine};
+        return unique_ptr<WasmEngine>{new WasmcEngine};
     }
     namespace
     {
@@ -199,9 +204,9 @@ namespace hera
             return wasm_functype_new(&params, &results);
         }
 
-        WasmerEthereumInterface *getInterfaceFromEnv(void *env)
+        WasmcInterface *getInterfaceFromEnv(void *env)
         {
-            return (WasmerEthereumInterface *)env;
+            return (WasmcInterface *)env;
         }
 
         own wasm_trap_t *beiUseGas(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
@@ -1021,7 +1026,7 @@ namespace hera
                                           "getCaller", "revert", "getTxOrigin", "getExternalCodeSize", "log", "getReturnDataSize", "getReturnData", "call",
                                           "registerAsset", "issueFungibleAsset", "issueNotFungibleAsset", "transferAsset", "getAssetBalance", "getNotFungibleAssetIDs",
                                           "getNotFungibleAssetInfo"};
-    void WasmerEngine::verifyContract(bytes_view code)
+    void WasmcEngine::verifyContract(bytes_view code)
     {
         wasm_engine_t *engine = wasm_engine_new();
         wasm_store_t *store = wasm_store_new(engine);
@@ -1209,18 +1214,18 @@ namespace hera
         wasm_trap_delete(trap);
         return ret;
     }
-    ExecutionResult WasmerEngine::execute(evmc::HostContext &context, bytes_view code,
+    ExecutionResult WasmcEngine::execute(evmc::HostContext &context, bytes_view code,
                                           bytes_view state_code, evmc_message const &msg, bool meterInterfaceGas)
     {
         instantiationStarted();
-        HERA_DEBUG << "Executing with wasmer...\n";
+        HERA_DEBUG << "Executing use wasmec API...\n";
         // Set up interface to eei host functions
         ExecutionResult result;
-        WasmerEthereumInterface interface{context, state_code, msg, result, meterInterfaceGas};
+        WasmcInterface interface{context, state_code, msg, result, meterInterfaceGas};
 
         // Instantiate a WebAssembly Instance from Wasm bytes and imports
         // TODO: check if need free code, for me it seems wasmer will free
-        HERA_DEBUG << "Compile wasm code use wasmer...\n";
+        HERA_DEBUG << "Compile wasm code use wasmec API...\n";
         wasm_engine_t *engine = wasm_engine_new();
         wasm_store_t *store = wasm_store_new(engine);
         wasm_byte_vec_t wasm_bytes;
@@ -1300,10 +1305,12 @@ namespace hera
             {
                 message = processTrap(trap);
             }
+            #if HERA_WASMER
             else
             {
                 message = get_last_wasmer_error();
             }
+            #endif
             HERA_DEBUG << "Create wasm instance failed, " << message << "...\n";
             wasm_module_delete(module);
             wasm_store_delete(store);
@@ -1326,10 +1333,10 @@ namespace hera
             wasm_module_delete(module);
             wasm_store_delete(store);
             wasm_engine_delete(engine);
-            ensureCondition(false, InvalidMemoryAccess, string("get memory from wasmer failed"));
+            ensureCondition(false, InvalidMemoryAccess, string("get memory from wasm failed"));
         }
         auto memory = wasm_extern_as_memory(memoryExtern);
-        HERA_DEBUG << "wasmer memory pages is " << wasm_memory_size(memory) << "\n";
+        HERA_DEBUG << "wasm memory pages is " << wasm_memory_size(memory) << "\n";
         if (wasm_memory_size(memory) == 0)
         {
             wasm_memory_delete(memory);
@@ -1339,7 +1346,7 @@ namespace hera
             wasm_module_delete(module);
             wasm_store_delete(store);
             wasm_engine_delete(engine);
-            ensureCondition(false, InvalidMemoryAccess, string("wasmer memory pages must greater than 1"));
+            ensureCondition(false, InvalidMemoryAccess, string("wasm memory pages must greater than 1"));
         }
         interface.setWasmStore(store);
         interface.setWasmMemory(memory);
@@ -1479,7 +1486,9 @@ namespace hera
             }
             else
             {
+                #if HERA_WASMER
                 HERA_DEBUG << "Unknown error. " << get_last_wasmer_error() << "\n";
+                #endif
                 throw std::runtime_error("Unknown error.");
             }
         }

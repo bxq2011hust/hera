@@ -28,8 +28,8 @@ if(HERA_WAVM)
   target_sources(hera PRIVATE wavm.cpp wavm.h)
 endif()
 
-if(HERA_WASMER)
-  target_sources(hera PRIVATE wasmer.cpp wasmer.h)
+if(HERA_WASMER OR HERA_WASMTIME)
+  target_sources(hera PRIVATE wasmc.cpp wasmc.h)
   target_compile_options(hera PRIVATE -Wno-error)
 endif()
 
@@ -68,7 +68,12 @@ endif()
 
 if(HERA_WASMER)
     target_compile_definitions(hera PRIVATE HERA_WASMER=1)
-    target_link_libraries(hera PRIVATE WASMER::runtim)
+    target_link_libraries(hera PRIVATE WASMER::runtime)
+endif()
+
+if(HERA_WASMTIME)
+    target_compile_definitions(hera PRIVATE HERA_WASMTIME=1)
+    target_link_libraries(hera PRIVATE WASMTIME::runtime)
 endif()
 
 install(TARGETS hera EXPORT heraTargets

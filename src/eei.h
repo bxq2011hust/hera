@@ -109,7 +109,7 @@ public:
 // WAVM/WABT host functions access this interface through an instance,
 // which requires public methods.
 // TODO: update upstream WAVM/WABT to have a context (user data) passed down.
-#if HERA_WAVM == 0 && HERA_WABT == 0 && HERA_WASMER == 0
+#if HERA_WAVM == 0 && HERA_WABT == 0 && HERA_WASMER == 0 && HERA_WASMTIME == 0
 protected:
 #endif
   virtual size_t memorySize() const = 0 ;
@@ -175,7 +175,7 @@ protected:
   int32_t beiGetNotFungibleAssetIDs(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint32_t resultOffset, uint32_t resultLength);
   int32_t beiGetNotFungibleAssetInfo(uint32_t addressOffset, uint32_t assetnameOffset, uint32_t length, uint64_t assetID, uint32_t resultOffset, uint32_t resultLength);
 
-#if HERA_WASMER
+#if HERA_WASMER || HERA_WASMTIME
 protected:
 #else
 private:
@@ -187,7 +187,7 @@ private:
     return "[" + std::to_string(m_msg.depth) + "]";
   }
 
-#if HERA_WASMER
+#if HERA_WASMER || HERA_WASMTIME
   virtual
 #endif
   void takeGas(int64_t gas);
