@@ -44,7 +44,7 @@ const string ETHEREUM_MODULE_NAME = "ethereum";
 
 namespace hera
 {
-    #if HERA_WASMER
+#if HERA_WASMER
     // Use the last_error API to retrieve error messages
     string get_last_wasmer_error()
     {
@@ -53,7 +53,27 @@ namespace hera
         wasmer_last_error_message(const_cast<char *>(errorMessage.data()), error_len);
         return errorMessage;
     }
-    #endif
+#else
+    string get_wasmtime_error(const char *message, wasmtime_error_t *error, wasm_trap_t *trap)
+    {
+        HERA_DEBUG << "error: " << message << "\n";
+        wasm_byte_vec_t error_message;
+        if (error != NULL)
+        {
+            wasmtime_error_message(error, &error_message);
+            wasmtime_error_delete(error);
+        }
+        else
+        {
+            wasm_trap_message(trap, &error_message);
+            wasm_trap_delete(trap);
+        }
+        string errorMessage((size_t)error_message.size, '\0');
+        memcpy(const_cast<char *>(errorMessage.data()), error_message.data, error_message.size);
+        wasm_byte_vec_delete(&error_message);
+        return errorMessage;
+    }
+#endif
     struct ImportFunction
     {
         // ~ImportFunction()
@@ -67,7 +87,7 @@ namespace hera
     {
     public:
         explicit WasmcInterface(evmc::HostContext &_context, bytes_view _code,
-                                         evmc_message const &_msg, ExecutionResult &_result, bool _meterGas)
+                                evmc_message const &_msg, ExecutionResult &_result, bool _meterGas)
             : EthereumInterface(_context, _code, _msg, _result, _meterGas)
         {
         }
@@ -1030,8 +1050,7 @@ namespace hera
     {
         wasm_engine_t *engine = wasm_engine_new();
         wasm_store_t *store = wasm_store_new(engine);
-        wasm_byte_vec_t wasm_bytes;
-        wasm_byte_vec_new(&wasm_bytes, code.size(), (const char *)code.data());
+        wasm_byte_vec_t wasm_bytes{code.size(), (char *)code.data()};
         wasm_module_t *module = wasm_module_new(store, &wasm_bytes);
         if (!module)
         {
@@ -1215,21 +1234,20 @@ namespace hera
         return ret;
     }
     ExecutionResult WasmcEngine::execute(evmc::HostContext &context, bytes_view code,
-                                          bytes_view state_code, evmc_message const &msg, bool meterInterfaceGas)
+                                         bytes_view state_code, evmc_message const &msg, bool meterInterfaceGas)
     {
         instantiationStarted();
-        HERA_DEBUG << "Executing use wasmec API...\n";
+        HERA_DEBUG << "Executing use wasmc API...\n";
         // Set up interface to eei host functions
         ExecutionResult result;
         WasmcInterface interface{context, state_code, msg, result, meterInterfaceGas};
 
         // Instantiate a WebAssembly Instance from Wasm bytes and imports
         // TODO: check if need free code, for me it seems wasmer will free
-        HERA_DEBUG << "Compile wasm code use wasmec API...\n";
+        HERA_DEBUG << "Compile wasm code use wasmc API...\n";
         wasm_engine_t *engine = wasm_engine_new();
         wasm_store_t *store = wasm_store_new(engine);
-        wasm_byte_vec_t wasm_bytes;
-        wasm_byte_vec_new(&wasm_bytes, code.size(), (const char *)code.data());
+        wasm_byte_vec_t wasm_bytes{code.size(), (char *)code.data()};
         wasm_module_t *module = wasm_module_new(store, &wasm_bytes);
         if (!module)
         {
@@ -1242,8 +1260,8 @@ namespace hera
         wasm_module_imports(module, &importTypes);
         vector<wasm_extern_t *> imports;
         imports.reserve(importTypes.size);
-        vector<shared_ptr<wasm_func_t> > functions;
-        functions.reserve(importTypes.size);
+        auto functions = make_shared<vector<shared_ptr<wasm_func_t> > >();
+        functions->reserve(importTypes.size);
         for (size_t i = 0; i < importTypes.size; ++i)
         {
             auto moduleName = wasm_importtype_module(importTypes.data[i]);
@@ -1273,6 +1291,7 @@ namespace hera
                 wasm_func_t *host_func = wasm_func_new_with_env(store, hostFunctions[functionName].functionType.get(), hostFunctions[functionName].function, env, NULL);
                 if (!host_func)
                 {
+                    functions.reset();
                     wasm_importtype_vec_delete(&importTypes);
                     wasm_module_delete(module);
                     wasm_store_delete(store);
@@ -1280,11 +1299,12 @@ namespace hera
                     ensureCondition(false, ContractValidationFailure, functionName + " import failed.");
                 }
                 imports.push_back(wasm_func_as_extern(host_func));
-                functions.push_back(shared_ptr<wasm_func_t>(host_func, [](auto p) { wasm_func_delete(p); }));
+                functions->push_back(shared_ptr<wasm_func_t>(host_func, [](auto p) { wasm_func_delete(p); }));
                 HERA_DEBUG << i << " " << string(moduleName->data, moduleName->size) << "::" << functionName << " imported\n";
             }
             else
             {
+                functions.reset();
                 wasm_importtype_vec_delete(&importTypes);
                 wasm_module_delete(module);
                 wasm_store_delete(store);
@@ -1297,7 +1317,12 @@ namespace hera
         wasm_extern_vec_t import_object{imports.size(), imports.data()};
         // Assert the Wasm instantion completed
         own wasm_trap_t *trap = NULL;
-        wasm_instance_t *instance = wasm_instance_new(store, module, &import_object, &trap);
+        wasm_instance_t *instance = NULL;
+#if HERA_WASMER
+        instance = wasm_instance_new(store, module, &import_object, &trap);
+#else
+        wasmtime_error_t *error = wasmtime_instance_new(store, module, &import_object, &instance, &trap);
+#endif
         if (!instance)
         {
             string message;
@@ -1305,12 +1330,14 @@ namespace hera
             {
                 message = processTrap(trap);
             }
-            #if HERA_WASMER
             else
             {
+#if HERA_WASMER
                 message = get_last_wasmer_error();
+#else
+                message = get_wasmtime_error("failed to instantiate", error, trap);
+#endif
             }
-            #endif
             HERA_DEBUG << "Create wasm instance failed, " << message << "...\n";
             wasm_module_delete(module);
             wasm_store_delete(store);
@@ -1339,7 +1366,9 @@ namespace hera
         HERA_DEBUG << "wasm memory pages is " << wasm_memory_size(memory) << "\n";
         if (wasm_memory_size(memory) == 0)
         {
+#if HERA_WASMER
             wasm_memory_delete(memory);
+#endif
             wasm_exporttype_vec_delete(&exportTypes);
             wasm_extern_vec_delete(&exports);
             wasm_instance_delete(instance);
@@ -1365,7 +1394,9 @@ namespace hera
             auto hashTypeFuncExtern = findExternByName("hash_type", exports, exportTypes);
             if (!hashTypeFuncExtern)
             {
+#if HERA_WASMER
                 wasm_memory_delete(memory);
+#endif
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
                 wasm_instance_delete(instance);
@@ -1381,11 +1412,16 @@ namespace hera
             wasm_val_vec_t args = WASM_ARRAY_VEC(args_val);
             wasm_val_vec_t results = WASM_ARRAY_VEC(results_val);
             trap = wasm_func_call(hashTypeFunc, &args, &results);
+#if HERA_WASMER
             wasm_func_delete(hashTypeFunc);
+#endif
             if (trap)
             { //call hash_type failed
+
                 auto message = processTrap(trap);
+#if HERA_WASMER
                 wasm_memory_delete(memory);
+#endif
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
                 wasm_instance_delete(instance);
@@ -1398,7 +1434,9 @@ namespace hera
 
             if (results_val[0].of.i32 != useSM3Hash)
             { // 0:keccak256, 1:sm3
+#if HERA_WASMER
                 wasm_memory_delete(memory);
+#endif
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
                 wasm_instance_delete(instance);
@@ -1414,7 +1452,9 @@ namespace hera
             auto funcExtern = findExternByName(callName, exports, exportTypes);
             if (!funcExtern)
             {
+#if HERA_WASMER
                 wasm_memory_delete(memory);
+#endif
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
                 wasm_instance_delete(instance);
@@ -1431,6 +1471,9 @@ namespace hera
             wasm_val_vec_t args = WASM_ARRAY_VEC(args_val);
             wasm_val_vec_t results = WASM_ARRAY_VEC(results_val);
             trap = wasm_func_call(func, &args, &results);
+#if HERA_WASMER
+            wasm_func_delete(func);
+#endif
         }
         catch (EndExecution const &)
         {
@@ -1441,7 +1484,10 @@ namespace hera
         {
             result.returnValue = code;
         }
+#if HERA_WASMER
         wasm_memory_delete(memory);
+        functions.reset();
+#endif
         wasm_exporttype_vec_delete(&exportTypes);
         wasm_extern_vec_delete(&exports);
         wasm_instance_delete(instance);
@@ -1486,9 +1532,9 @@ namespace hera
             }
             else
             {
-                #if HERA_WASMER
+#if HERA_WASMER
                 HERA_DEBUG << "Unknown error. " << get_last_wasmer_error() << "\n";
-                #endif
+#endif
                 throw std::runtime_error("Unknown error.");
             }
         }

@@ -21,10 +21,11 @@ ExternalProject_Add(wasmer
         DOWNLOAD_NO_PROGRESS 1
         GIT_REPOSITORY https://github.com/wasmerio/wasmer.git
         GIT_SHALLOW true
+        # GIT_TAG cc37172c38bc8d7ab3da868f6589c6a82f7c2d91
         GIT_TAG 8b2c3852b66e4eaf0267762632aeb78c42632449
         BUILD_IN_SOURCE 1
         PATCH_COMMAND COMMAND git checkout Cargo.lock
-        CONFIGURE_COMMAND COMMAND git checkout Cargo.toml COMMAND echo "[profile.release]" >> Cargo.toml COMMAND echo "lto=false" >> Cargo.toml
+        CONFIGURE_COMMAND COMMAND git checkout Cargo.toml COMMAND echo "" >> Cargo.toml COMMAND echo "[profile.release]" >> Cargo.toml COMMAND echo "lto=false" >> Cargo.toml
         BUILD_COMMAND ${WASMER_BUILD_COMMAND}
         INSTALL_COMMAND COMMAND git checkout Cargo.toml
         # must not log configure
