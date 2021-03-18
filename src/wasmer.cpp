@@ -1332,6 +1332,7 @@ namespace hera
         HERA_DEBUG << "wasmer memory pages is " << wasm_memory_size(memory) << "\n";
         if (wasm_memory_size(memory) == 0)
         {
+            wasm_memory_delete(memory);
             wasm_exporttype_vec_delete(&exportTypes);
             wasm_extern_vec_delete(&exports);
             wasm_instance_delete(instance);
@@ -1357,6 +1358,7 @@ namespace hera
             auto hashTypeFuncExtern = findExternByName("hash_type", exports, exportTypes);
             if (!hashTypeFuncExtern)
             {
+                wasm_memory_delete(memory);
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
                 wasm_instance_delete(instance);
@@ -1376,6 +1378,7 @@ namespace hera
             if (trap)
             { //call hash_type failed
                 auto message = processTrap(trap);
+                wasm_memory_delete(memory);
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
                 wasm_instance_delete(instance);
@@ -1388,6 +1391,7 @@ namespace hera
 
             if (results_val[0].of.i32 != useSM3Hash)
             { // 0:keccak256, 1:sm3
+                wasm_memory_delete(memory);
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
                 wasm_instance_delete(instance);
@@ -1403,6 +1407,7 @@ namespace hera
             auto funcExtern = findExternByName(callName, exports, exportTypes);
             if (!funcExtern)
             {
+                wasm_memory_delete(memory);
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
                 wasm_instance_delete(instance);
@@ -1429,6 +1434,7 @@ namespace hera
         {
             result.returnValue = code;
         }
+        wasm_memory_delete(memory);
         wasm_exporttype_vec_delete(&exportTypes);
         wasm_extern_vec_delete(&exports);
         wasm_instance_delete(instance);
@@ -1473,7 +1479,7 @@ namespace hera
             }
             else
             {
-                HERA_DEBUG << "Unknown error. " << get_last_wasmer_error() <<"\n";
+                HERA_DEBUG << "Unknown error. " << get_last_wasmer_error() << "\n";
                 throw std::runtime_error("Unknown error.");
             }
         }
