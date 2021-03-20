@@ -1033,7 +1033,7 @@ namespace hera
 
             return imports;
         }
-        map<string, map<string, ImportFunction> > GLOBAL_IMPORTS = initImportes();
+        static map<string, map<string, ImportFunction> > GLOBAL_IMPORTS = initImportes();
     } // namespace
     static const set<string> eeiFunctions{"useGas", "getGasLeft", "getAddress", "getExternalBalance",
                                           "getBlockHash", "getCallDataSize", "callDataCopy", "getCaller", "getCallValue", "codeCopy",
@@ -1202,7 +1202,7 @@ namespace hera
         wasm_trap_message(trap, &message);
         string ret(message.data, message.size);
         wasm_name_delete(&message);
-#if HERA_DEBUGGING
+#if HERA_DEBUGGING && HERA_WASMER
         HERA_DEBUG << "Printing origin...\n";
         own wasm_frame_t *frame = wasm_trap_origin(trap);
         if (frame)
@@ -1486,8 +1486,8 @@ namespace hera
         }
 #if HERA_WASMER
         wasm_memory_delete(memory);
-        functions.reset();
 #endif
+        functions.reset();
         wasm_exporttype_vec_delete(&exportTypes);
         wasm_extern_vec_delete(&exports);
         wasm_instance_delete(instance);

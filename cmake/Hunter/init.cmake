@@ -5,6 +5,6 @@ set(HUNTER_CONFIGURATION_TYPES Release
 include(HunterGate)
 
 HunterGate(
-    URL "https://github.com/ruslo/hunter/archive/v0.23.169.tar.gz"
-    SHA1 "60de9f275143ab38df559986c04e3726683e7de7"
+    URL "https://github.com/cpp-pm/hunter/archive/v0.23.296.tar.gz"
+    SHA1 "232f5022ee1d45955a7e8d3e1720f31bac1bb534"
 )

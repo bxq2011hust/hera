@@ -12,7 +12,7 @@ ExternalProject_Add(wasmtime
         DOWNLOAD_NO_PROGRESS 1
         GIT_REPOSITORY https://github.com/bytecodealliance/wasmtime.git
         GIT_SHALLOW true
-        GIT_TAG 5fecdfa49150e3304c1b949aab73bd4a0a02dbac
+        GIT_TAG a8aaf812ef675e92f717893fc845db2dc5018128
         BUILD_IN_SOURCE 1
         PATCH_COMMAND COMMAND git checkout Cargo.lock
         CONFIGURE_COMMAND COMMAND git checkout Cargo.toml COMMAND echo "[profile.release]" >> Cargo.toml COMMAND echo "lto=false" >> Cargo.toml
@@ -33,4 +33,4 @@ set(WASMTIME_RUNTIME_LIBRARIES ${SOURCE_DIR}/target/release/libwasmtime.a)
 set_property(TARGET WASMTIME::runtime PROPERTY IMPORTED_LOCATION ${WASMTIME_RUNTIME_LIBRARIES})
 set_property(TARGET WASMTIME::runtime PROPERTY INTERFACE_INCLUDE_DIRECTORIES ${WASMTIME_INCLUDE_DIRS})
 install(FILES ${WASMTIME_RUNTIME_LIBRARIES} DESTINATION ${CMAKE_INSTALL_LIBDIR})
-add_dependencies(WASMTIME::runtime WASMTIME)
+add_dependencies(WASMTIME::runtime wasmtime)
