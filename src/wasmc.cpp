@@ -25,7 +25,8 @@
 #include <map>
 #include <mutex> // For std::unique_lock
 #include <shared_mutex>
-// #define PERF_TIME
+#include <atomic>
+#define PERF_TIME
 
 #if HERA_WASMER
 #include "c-api/wasmer_wasm.h"
@@ -89,11 +90,26 @@ namespace hera
         shared_ptr<wasm_functype_t> functionType;
         wasm_func_callback_with_env_t function;
     };
-    struct WasmModule
+    struct WasmInstance
+    {
+        WasmInstance(shared_ptr<vector<shared_ptr<wasm_func_t> > > _functions, wasm_instance_t *_instance)
+            : functions(_functions), instance(_instance) {}
+        shared_ptr<vector<shared_ptr<wasm_func_t> > > functions = nullptr;
+        wasm_instance_t *instance = nullptr;
+        atomic_bool idle = {true};
+    };
+    struct InstanceHolder
+    {
+        ~InstanceHolder() { instance->idle.store(false); }
+        shared_ptr<WasmInstance> instance;
+    };
+    struct WasmInstanceContainer
     {
         wasm_engine_t *engine = nullptr;
         wasm_store_t *store = nullptr;
         wasm_module_t *module = nullptr;
+        vector<shared_ptr<WasmInstance> > instances;
+        std::shared_mutex instancesMutex;
     };
     class WasmcInterface : public EthereumInterface
     {
@@ -1047,7 +1063,7 @@ namespace hera
         }
         static map<string, map<string, ImportFunction> > GLOBAL_IMPORTS = initImportes();
         static std::shared_mutex GLOBAL_MODULES_MUTEX_;
-        static map<string, shared_ptr<WasmModule> > GLOBAL_MODULES_CACHE;
+        static map<string, shared_ptr<WasmInstanceContainer> > GLOBAL_MODULES_CACHE;
     } // namespace
     static const set<string> eeiFunctions{"useGas", "getGasLeft", "getAddress", "getExternalBalance",
                                           "getBlockHash", "getCallDataSize", "callDataCopy", "getCaller", "getCallValue", "codeCopy",
@@ -1247,78 +1263,11 @@ namespace hera
         wasm_trap_delete(trap);
         return ret;
     }
-    ExecutionResult WasmcEngine::execute(evmc::HostContext &context, bytes_view code,
-                                         bytes_view state_code, evmc_message const &msg, bool meterInterfaceGas)
+
+    shared_ptr<WasmInstance> createWasmInstance(wasm_store_t *store, wasm_module_t *module, void *env)
     {
-        instantiationStarted();
-        HERA_DEBUG << "Executing use wasmc API...\n";
-        // Set up interface to eei host functions
-        ExecutionResult result;
-        WasmcInterface interface{context, state_code, msg, result, meterInterfaceGas};
-
-        // Instantiate a WebAssembly Instance from Wasm bytes and imports
-        // TODO: check if need free code, for me it seems wasmer will free
-        HERA_DEBUG << "Compile wasm code use wasmc API...\n";
-#ifdef PERF_TIME
-        auto start = system_clock::now();
-#endif
-        shared_ptr<WasmModule> wasmModule = nullptr;
-        string myAddress((const char *)msg.destination.bytes, 20);
-        {
-            std::shared_lock lock(GLOBAL_MODULES_MUTEX_);
-            if (GLOBAL_MODULES_CACHE.count(myAddress))
-            {
-                wasmModule = GLOBAL_MODULES_CACHE[myAddress];
-            }
-        }
-        if (!wasmModule)
-        {
-#if HERA_WASMER
-            wasm_engine_t *engine = wasm_engine_new();
-#else
-            wasm_config_t *wasm_config = wasm_config_new();
-            wasmtime_config_max_instances_set(wasm_config, MAX_INSTANCE);
-            wasm_engine_t *engine = wasm_engine_new_with_config(wasm_config);
-#endif
-            wasm_store_t *store = wasm_store_new(engine);
-
-            wasm_byte_vec_t wasm_bytes{code.size(), (char *)code.data()};
-            auto module = wasm_module_new(store, &wasm_bytes);
-            if (!module)
-            {
-                wasm_store_delete(store);
-                wasm_engine_delete(engine);
-                ensureCondition(false, ContractValidationFailure, string("Compile wasm failed"));
-            }
-            auto p = shared_ptr<WasmModule>(new WasmModule{engine, store, module}, [](auto p) {
-                if (p->module)
-                {
-                    wasm_module_delete(p->module);
-                }
-                if (p->store)
-                {
-                    wasm_store_delete(p->store);
-                }
-                if (p->engine)
-                {
-                    wasm_engine_delete(p->engine);
-                }
-                delete p;
-            });
-            std::unique_lock lock(GLOBAL_MODULES_MUTEX_);
-            GLOBAL_MODULES_CACHE[myAddress] = p;
-            wasmModule = p;
-        }
-        auto module = wasmModule->module;
-#if HERA_WASMER
-        auto store = wasmModule->store;
-#else
-        auto store = wasm_store_new(wasmModule->engine);
-        auto store_holder = shared_ptr<wasm_store_t>(store, [](auto p) { wasm_store_delete(p); });
-#endif
 #ifdef PERF_TIME
         auto end = system_clock::now();
-        cout << "wasm new module used(us):" << duration_cast<microseconds>(end - start).count() << endl;
 #endif
         wasm_importtype_vec_t importTypes;
         wasm_module_imports(module, &importTypes);
@@ -1348,7 +1297,6 @@ namespace hera
 
             if (hostFunctions.count(functionName))
             {
-                auto env = (void *)&interface;
                 wasm_func_t *host_func = wasm_func_new_with_env(store, hostFunctions[functionName].functionType.get(), hostFunctions[functionName].function, env, NULL);
                 if (!host_func)
                 {
@@ -1370,7 +1318,7 @@ namespace hera
         wasm_importtype_vec_delete(&importTypes);
 #ifdef PERF_TIME
         auto end2 = system_clock::now();
-        cout << "wasm imports used(us)   :" << duration_cast<microseconds>(end2 - end).count() << endl;
+        cout << "wasm new imports used(us) : " << duration_cast<microseconds>(end2 - end).count() << endl;
 #endif
         HERA_DEBUG << "Create wasm instance...\n";
         wasm_extern_vec_t import_object{imports.size(), imports.data()};
@@ -1400,11 +1348,124 @@ namespace hera
             HERA_DEBUG << "Create wasm instance failed, " << message << "...\n";
             ensureCondition(false, ContractValidationFailure, "Error instantiating wasm");
         }
+        return make_shared<WasmInstance>(functions, instance);
+    }
+
+    shared_ptr<WasmInstanceContainer> getWasmInstanceContainer(const string &address, bytes_view code, void *env)
+    {
 #ifdef PERF_TIME
-        auto end3 = system_clock::now();
-        cout << "wasm instance used(us)  :" << duration_cast<microseconds>(end3 - end2).count() << endl;
+        auto end = system_clock::now();
 #endif
-        auto instance_holder = shared_ptr<wasm_instance_t>(instance, [](auto p) { wasm_instance_delete(p); });
+        {
+            std::shared_lock lock(GLOBAL_MODULES_MUTEX_);
+            if (GLOBAL_MODULES_CACHE.count(address))
+            {
+                return GLOBAL_MODULES_CACHE[address];
+            }
+        }
+
+#if HERA_WASMER
+        wasm_engine_t *engine = wasm_engine_new();
+#else
+        wasm_config_t *wasm_config = wasm_config_new();
+        wasmtime_config_max_instances_set(wasm_config, MAX_INSTANCE);
+        wasm_engine_t *engine = wasm_engine_new_with_config(wasm_config);
+#endif
+        wasm_store_t *store = wasm_store_new(engine);
+
+        wasm_byte_vec_t wasm_bytes{code.size(), (char *)code.data()};
+        auto module = wasm_module_new(store, &wasm_bytes);
+        if (!module)
+        {
+            wasm_store_delete(store);
+            wasm_engine_delete(engine);
+            ensureCondition(false, ContractValidationFailure, string("Compile wasm failed"));
+        }
+        // #if HERA_WASMER
+        //         auto store = wasmModule->store;
+        // #else
+        //         auto store = wasm_store_new(wasmModule->engine);
+        //         auto store_holder = shared_ptr<wasm_store_t>(store, [](auto p) { wasm_store_delete(p); });
+        // #endif
+        shared_ptr<WasmInstance> wasmInstance = createWasmInstance(store, module, env);
+        auto p = shared_ptr<WasmInstanceContainer>(new WasmInstanceContainer{engine, store, module, {wasmInstance}}, [](auto p) {
+            for (auto i : p->instances)
+            {
+                wasm_instance_delete(i->instance);
+                i->functions.reset();
+            }
+            if (p->module)
+            {
+                wasm_module_delete(p->module);
+                p->module = nullptr;
+            }
+            if (p->store)
+            {
+                wasm_store_delete(p->store);
+                p->store = nullptr;
+            }
+            if (p->engine)
+            {
+                wasm_engine_delete(p->engine);
+                p->engine = nullptr;
+            }
+            delete p;
+        });
+#ifdef PERF_TIME
+        auto end2 = system_clock::now();
+        cout << "wasm instance used(us)    : " << duration_cast<microseconds>(end2 - end).count() << endl;
+#endif
+        std::unique_lock lock(GLOBAL_MODULES_MUTEX_);
+        GLOBAL_MODULES_CACHE[address] = p;
+        return p;
+    }
+    shared_ptr<WasmInstance> getInstanceFromContainer(shared_ptr<WasmInstanceContainer> container, void *env)
+    {
+        {
+            std::shared_lock lock(container->instancesMutex);
+            for (auto i : container->instances)
+            {
+                if (i->idle.load())
+                {
+                    if (i->idle.exchange(false))
+                    {
+                        return i;
+                    }
+                }
+            }
+        }
+        shared_ptr<WasmInstance> wasmInstance = createWasmInstance(container->store, container->module, env);
+        wasmInstance->idle.store(false);
+        std::unique_lock lock(container->instancesMutex);
+        container->instances.push_back(wasmInstance);
+        return wasmInstance;
+    }
+    ExecutionResult WasmcEngine::execute(evmc::HostContext &context, bytes_view code,
+                                         bytes_view state_code, evmc_message const &msg, bool meterInterfaceGas)
+    {
+        instantiationStarted();
+        HERA_DEBUG << "Executing use wasmc API...\n";
+        // Set up interface to eei host functions
+        ExecutionResult result;
+        WasmcInterface interface{context, state_code, msg, result, meterInterfaceGas};
+
+        // Instantiate a WebAssembly Instance from Wasm bytes and imports
+        // TODO: check if need free code, for me it seems wasmer will free
+        HERA_DEBUG << "Compile wasm code use wasmc API...\n";
+#ifdef PERF_TIME
+        auto start = system_clock::now();
+#endif
+        string myAddress((const char *)msg.destination.bytes, 20);
+        shared_ptr<WasmInstanceContainer> containter = getWasmInstanceContainer(myAddress, code, (void *)&interface);
+        auto wasmInstance = getInstanceFromContainer(containter, (void *)&interface);
+        auto instanceHolder = InstanceHolder{wasmInstance};
+        auto module = containter->module;
+        auto instance = wasmInstance->instance;
+        auto store = containter->store;
+#ifdef PERF_TIME
+        auto end = system_clock::now();
+        cout << "wasm new module used(us)  : " << duration_cast<microseconds>(end - start).count() << endl;
+#endif
         wasm_extern_vec_t exports;
         wasm_instance_exports(instance, &exports);
 
@@ -1459,7 +1520,7 @@ namespace hera
             wasm_val_t results_val[1] = {WASM_INIT_VAL};
             wasm_val_vec_t args = WASM_ARRAY_VEC(args_val);
             wasm_val_vec_t results = WASM_ARRAY_VEC(results_val);
-            trap = wasm_func_call(hashTypeFunc, &args, &results);
+            auto trap = wasm_func_call(hashTypeFunc, &args, &results);
 #if HERA_WASMER
             wasm_func_delete(hashTypeFunc);
 #endif
@@ -1489,6 +1550,7 @@ namespace hera
 #ifdef PERF_TIME
         auto end4 = system_clock::now();
 #endif
+        wasm_trap_t *trap = nullptr;
         try
         {
             HERA_DEBUG << "Executing contract " << callName << "...\n";
@@ -1505,7 +1567,7 @@ namespace hera
             auto func = wasm_extern_as_func(funcExtern);
 #ifdef PERF_TIME
             end4 = system_clock::now();
-            cout << "wasm get exports used(us):" << duration_cast<microseconds>(end4 - end3).count() << endl;
+            cout << "wasm get exports used(us) : " << duration_cast<microseconds>(end4 - end).count() << endl;
 #endif
             // call
             wasm_val_t args_val[] = {};
@@ -1524,7 +1586,7 @@ namespace hera
         }
 #ifdef PERF_TIME
         auto end5 = system_clock::now();
-        cout << "wasm execute used(us)   :" << duration_cast<microseconds>(end5 - end4).count() << endl;
+        cout << "wasm execute main used(us): " << duration_cast<microseconds>(end5 - end4).count() << endl;
 #endif
         if (msg.kind == EVMC_CREATE && !result.isRevert)
         {
@@ -1533,13 +1595,12 @@ namespace hera
 #if HERA_WASMER
         wasm_memory_delete(memory);
 #endif
-        functions.reset();
         wasm_exporttype_vec_delete(&exportTypes);
         wasm_extern_vec_delete(&exports);
         executionFinished();
 #ifdef PERF_TIME
         auto end6 = system_clock::now();
-        cout << "wasm free exports used(us):" << duration_cast<microseconds>(end6 - end5).count() << endl;
+        cout << "wasm free exports used(us): " << duration_cast<microseconds>(end6 - end5).count() << endl;
 #endif
         if (trap)
         { //call main/deploy failed, process trap, print frame and trace
@@ -1596,7 +1657,7 @@ namespace hera
 #endif
 #ifdef PERF_TIME
         auto end7 = system_clock::now();
-        cout << "wasm parse trap used(us):" << duration_cast<microseconds>(end7 - end6).count() << ", total = " << duration_cast<microseconds>(end7 - start).count() << endl;
+        cout << "wasm parse trap used(us)  : " << duration_cast<microseconds>(end7 - end6).count() << ", total = " << duration_cast<microseconds>(end7 - start).count() << endl;
 #endif
         return result;
     };
