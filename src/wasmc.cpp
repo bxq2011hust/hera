@@ -1370,7 +1370,7 @@ namespace hera
         wasm_importtype_vec_delete(&importTypes);
 #ifdef PERF_TIME
         auto end2 = system_clock::now();
-        cout << "wasm prepare imports used(us):" << duration_cast<microseconds>(end2 - end).count() << endl;
+        cout << "wasm imports used(us)   :" << duration_cast<microseconds>(end2 - end).count() << endl;
 #endif
         HERA_DEBUG << "Create wasm instance...\n";
         wasm_extern_vec_t import_object{imports.size(), imports.data()};
@@ -1402,7 +1402,7 @@ namespace hera
         }
 #ifdef PERF_TIME
         auto end3 = system_clock::now();
-        cout << "wasm new instance used(us):" << duration_cast<microseconds>(end3 - end2).count() << endl;
+        cout << "wasm instance used(us)  :" << duration_cast<microseconds>(end3 - end2).count() << endl;
 #endif
         auto instance_holder = shared_ptr<wasm_instance_t>(instance, [](auto p) { wasm_instance_delete(p); });
         wasm_extern_vec_t exports;
@@ -1431,10 +1431,7 @@ namespace hera
         }
         interface.setWasmStore(store);
         interface.setWasmMemory(memory);
-#ifdef PERF_TIME
-        auto end4 = system_clock::now();
-        cout << "wasm find memory used(us):" << duration_cast<microseconds>(end4 - end3).count() << endl;
-#endif
+
         // Call the Wasm function
         const char *callName = "main";
         if (msg.kind == EVMC_CREATE)
@@ -1489,6 +1486,9 @@ namespace hera
                 ensureCondition(false, ContractValidationFailure, "hash type mismatch");
             }
         }
+#ifdef PERF_TIME
+        auto end4 = system_clock::now();
+#endif
         try
         {
             HERA_DEBUG << "Executing contract " << callName << "...\n";
@@ -1503,7 +1503,10 @@ namespace hera
                 ensureCondition(false, ContractValidationFailure, "can't find main/deploy");
             }
             auto func = wasm_extern_as_func(funcExtern);
-
+#ifdef PERF_TIME
+            end4 = system_clock::now();
+            cout << "wasm get exports used(us):" << duration_cast<microseconds>(end4 - end3).count() << endl;
+#endif
             // call
             wasm_val_t args_val[] = {};
             wasm_val_t results_val[] = {};
@@ -1521,7 +1524,7 @@ namespace hera
         }
 #ifdef PERF_TIME
         auto end5 = system_clock::now();
-        cout << "wasm execute deploy/main used(us):" << duration_cast<microseconds>(end5 - end4).count() << endl;
+        cout << "wasm execute used(us)   :" << duration_cast<microseconds>(end5 - end4).count() << endl;
 #endif
         if (msg.kind == EVMC_CREATE && !result.isRevert)
         {
@@ -1536,7 +1539,7 @@ namespace hera
         executionFinished();
 #ifdef PERF_TIME
         auto end6 = system_clock::now();
-        cout << "wasm free resource used(us):" << duration_cast<microseconds>(end6 - end5).count() << endl;
+        cout << "wasm free exports used(us):" << duration_cast<microseconds>(end6 - end5).count() << endl;
 #endif
         if (trap)
         { //call main/deploy failed, process trap, print frame and trace
@@ -1593,7 +1596,7 @@ namespace hera
 #endif
 #ifdef PERF_TIME
         auto end7 = system_clock::now();
-        cout << "wasm return result used(us):" << duration_cast<microseconds>(end7 - end6).count() << ", total = " << duration_cast<microseconds>(end7 - start).count() << endl;
+        cout << "wasm parse trap used(us):" << duration_cast<microseconds>(end7 - end6).count() << ", total = " << duration_cast<microseconds>(end7 - start).count() << endl;
 #endif
         return result;
     };
