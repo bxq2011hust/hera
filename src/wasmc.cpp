@@ -25,7 +25,6 @@
 #include <map>
 #include <mutex> // For std::unique_lock
 #include <shared_mutex>
-#include <atomic>
 // #define PERF_TIME
 
 #if HERA_WASMER
@@ -95,7 +94,6 @@ namespace hera
         wasm_engine_t *engine = nullptr;
         wasm_store_t *store = nullptr;
         wasm_module_t *module = nullptr;
-        atomic_uint32_t storeRef = {0};
     };
     class WasmcInterface : public EthereumInterface
     {
@@ -1271,13 +1269,6 @@ namespace hera
             if (GLOBAL_MODULES_CACHE.count(myAddress))
             {
                 wasmModule = GLOBAL_MODULES_CACHE[myAddress];
-                wasmModule->storeRef.fetch_add(1);
-#if !HERA_WASMER
-                if (wasmModule->storeRef.load() >= MAX_INSTANCE - 10)
-                {
-                    wasmModule = nullptr;
-                }
-#endif
             }
         }
         if (!wasmModule)
@@ -1299,7 +1290,7 @@ namespace hera
                 wasm_engine_delete(engine);
                 ensureCondition(false, ContractValidationFailure, string("Compile wasm failed"));
             }
-            auto p = shared_ptr<WasmModule>(new WasmModule{engine, store, module, 1}, [](auto p) {
+            auto p = shared_ptr<WasmModule>(new WasmModule{engine, store, module}, [](auto p) {
                 if (p->module)
                 {
                     wasm_module_delete(p->module);
@@ -1319,7 +1310,12 @@ namespace hera
             wasmModule = p;
         }
         auto module = wasmModule->module;
+#if HERA_WASMER
         auto store = wasmModule->store;
+#else
+        auto store = wasm_store_new(wasmModule->engine);
+        auto store_holder = shared_ptr<wasm_store_t>(store, [](auto p) { wasm_store_delete(p); });
+#endif
 #ifdef PERF_TIME
         auto end = system_clock::now();
         cout << "wasm new module used(us):" << duration_cast<microseconds>(end - start).count() << endl;
@@ -1362,7 +1358,7 @@ namespace hera
                 }
                 imports.push_back(wasm_func_as_extern(host_func));
                 functions->push_back(shared_ptr<wasm_func_t>(host_func, [](auto p) { wasm_func_delete(p); }));
-                HERA_DEBUG << i << " " << string(moduleName->data, moduleName->size) << "::" << functionName << " imported\n";
+                // HERA_DEBUG << i << " " << string(moduleName->data, moduleName->size) << "::" << functionName << " imported\n";
             }
             else
             {
@@ -1408,6 +1404,7 @@ namespace hera
         auto end3 = system_clock::now();
         cout << "wasm new instance used(us):" << duration_cast<microseconds>(end3 - end2).count() << endl;
 #endif
+        auto instance_holder = shared_ptr<wasm_instance_t>(instance, [](auto p) { wasm_instance_delete(p); });
         wasm_extern_vec_t exports;
         wasm_instance_exports(instance, &exports);
 
@@ -1419,7 +1416,6 @@ namespace hera
         {
             wasm_exporttype_vec_delete(&exportTypes);
             wasm_extern_vec_delete(&exports);
-            wasm_instance_delete(instance);
             ensureCondition(false, InvalidMemoryAccess, string("get memory from wasm failed"));
         }
         auto memory = wasm_extern_as_memory(memoryExtern);
@@ -1431,7 +1427,6 @@ namespace hera
 #endif
             wasm_exporttype_vec_delete(&exportTypes);
             wasm_extern_vec_delete(&exports);
-            wasm_instance_delete(instance);
             ensureCondition(false, InvalidMemoryAccess, string("wasm memory pages must greater than 1"));
         }
         interface.setWasmStore(store);
@@ -1459,7 +1454,6 @@ namespace hera
 #endif
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
-                wasm_instance_delete(instance);
                 ensureCondition(false, ContractValidationFailure, "get hash function failed");
             }
             auto hashTypeFunc = wasm_extern_as_func(hashTypeFuncExtern);
@@ -1481,7 +1475,6 @@ namespace hera
 #endif
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
-                wasm_instance_delete(instance);
                 ensureCondition(false, ContractValidationFailure, "call hash_type failed, " + message);
             }
             HERA_DEBUG << "Contract hash algorithm is " << (results_val[0].of.i32 ? "sm3\n" : "keccak256\n");
@@ -1493,7 +1486,6 @@ namespace hera
 #endif
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
-                wasm_instance_delete(instance);
                 ensureCondition(false, ContractValidationFailure, "hash type mismatch");
             }
         }
@@ -1508,7 +1500,6 @@ namespace hera
 #endif
                 wasm_exporttype_vec_delete(&exportTypes);
                 wasm_extern_vec_delete(&exports);
-                wasm_instance_delete(instance);
                 ensureCondition(false, ContractValidationFailure, "can't find main/deploy");
             }
             auto func = wasm_extern_as_func(funcExtern);
@@ -1542,7 +1533,6 @@ namespace hera
         functions.reset();
         wasm_exporttype_vec_delete(&exportTypes);
         wasm_extern_vec_delete(&exports);
-        wasm_instance_delete(instance);
         executionFinished();
 #ifdef PERF_TIME
         auto end6 = system_clock::now();
