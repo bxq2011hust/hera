@@ -23,10 +23,11 @@
 #include <vector>
 #include <set>
 #include <map>
+#include <list>
 #include <mutex> // For std::unique_lock
 #include <shared_mutex>
 #include <atomic>
-#define PERF_TIME
+// #define PERF_TIME
 
 #if HERA_WASMER
 #include "c-api/wasmer_wasm.h"
@@ -52,7 +53,7 @@ const char *STACK_OVERFLOW = "stack exhausted";
 const string BCOS_MODULE_NAME = "bcos";
 const string DEBUG_MODULE_NAME = "debug";
 const string ETHEREUM_MODULE_NAME = "ethereum";
-
+const int32_t INSTANCE_MAX_REUSED = 100;
 namespace hera
 {
 #if HERA_WASMER
@@ -85,39 +86,7 @@ namespace hera
         return errorMessage;
     }
 #endif
-    struct ImportFunction
-    {
-        shared_ptr<wasm_functype_t> functionType;
-        wasm_func_callback_with_env_t function;
-    };
-    struct WasmInstance
-    {
-        WasmInstance(shared_ptr<vector<shared_ptr<wasm_func_t> > > _functions, wasm_instance_t *_instance, wasm_store_t *_store)
-            : functions(_functions), instance(_instance), store(_store) {}
-        shared_ptr<vector<shared_ptr<wasm_func_t> > > functions = nullptr;
-        wasm_instance_t *instance = nullptr;
-        wasm_store_t *store = nullptr;
-        wasm_func_t *hashTypeFunc = nullptr;
-        wasm_func_t *deployFunc = nullptr;
-        wasm_func_t *mainFunc = nullptr;
-        wasm_memory_t *memory = nullptr;
-        wasm_extern_vec_t exports;
-        shared_ptr<vector<wasm_extern_t *>> imports = nullptr;
-        shared_ptr<wasm_extern_vec_t> import_object = nullptr;
-        atomic_bool idle = {true};
-    };
-    struct InstanceHolder
-    {
-        ~InstanceHolder() { instance->idle.store(true); }
-        shared_ptr<WasmInstance> instance;
-    };
-    struct WasmInstanceContainer
-    {
-        wasm_engine_t *engine = nullptr;
-        wasm_module_t *module = nullptr;
-        vector<shared_ptr<WasmInstance> > instances;
-        std::shared_mutex instancesMutex;
-    };
+
     class WasmcInterface : public EthereumInterface
     {
     public:
@@ -192,11 +161,59 @@ namespace hera
         wasm_memory_t *m_wasmMemory;
         wasm_store_t *m_wasmStore = nullptr;
     };
-
     unique_ptr<WasmEngine> WasmcEngine::create()
     {
         return unique_ptr<WasmEngine>{new WasmcEngine};
     }
+    struct HostContext
+    {
+        void *env = nullptr;
+    };
+    struct ImportFunction
+    {
+        shared_ptr<wasm_functype_t> functionType;
+        wasm_func_callback_with_env_t function;
+    };
+    struct WasmInstance
+    {
+        WasmInstance(shared_ptr<vector<shared_ptr<wasm_func_t> > > _functions, wasm_instance_t *_instance, wasm_store_t *_store)
+            : functions(_functions), instance(_instance), store(_store) {}
+        shared_ptr<vector<shared_ptr<wasm_func_t> > > functions = nullptr;
+        wasm_instance_t *instance = nullptr;
+        wasm_store_t *store = nullptr;
+        wasm_func_t *hashTypeFunc = nullptr;
+        wasm_func_t *deployFunc = nullptr;
+        wasm_func_t *mainFunc = nullptr;
+        wasm_memory_t *memory = nullptr;
+        wasm_extern_vec_t exports;
+        shared_ptr<vector<wasm_extern_t *> > imports = nullptr;
+        shared_ptr<wasm_extern_vec_t> import_object = nullptr;
+        shared_ptr<HostContext> hostContext = nullptr;
+        atomic_bool idle = {true};
+        atomic_int32_t usedCount = {1};
+    };
+    struct WasmInstanceContainer
+    {
+        wasm_engine_t *engine = nullptr;
+        wasm_module_t *module = nullptr;
+        list<shared_ptr<WasmInstance> > instances;
+        std::shared_mutex instancesMutex;
+    };
+    struct InstanceHolder
+    {
+        ~InstanceHolder()
+        {
+            if (instance->usedCount.load() >= INSTANCE_MAX_REUSED)
+            {
+                std::unique_lock lock(container->instancesMutex);
+                container->instances.remove(instance);
+            }
+            instance->idle.store(true);
+        }
+        shared_ptr<WasmInstance> instance = nullptr;
+        shared_ptr<WasmInstanceContainer> container = nullptr;
+    };
+
     namespace
     {
 
@@ -261,7 +278,7 @@ namespace hera
 
         WasmcInterface *getInterfaceFromEnv(void *env)
         {
-            return (WasmcInterface *)env;
+            return (WasmcInterface *)((HostContext *)env)->env;
         }
 
         own wasm_trap_t *beiUseGas(void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results)
@@ -1271,17 +1288,18 @@ namespace hera
         return ret;
     }
 
-    shared_ptr<WasmInstance> createWasmInstance(wasm_store_t *store, wasm_module_t *module, void *env)
+    shared_ptr<WasmInstance> createWasmInstance(wasm_store_t *store, wasm_module_t *module)
     {
 #ifdef PERF_TIME
         auto end = system_clock::now();
 #endif
         wasm_importtype_vec_t importTypes;
         wasm_module_imports(module, &importTypes);
-        auto imports = make_shared<vector<wasm_extern_t *>>();
+        auto imports = make_shared<vector<wasm_extern_t *> >();
         imports->reserve(importTypes.size);
         auto functions = make_shared<vector<shared_ptr<wasm_func_t> > >();
         functions->reserve(importTypes.size);
+        auto hostContext = make_shared<HostContext>();
         for (size_t i = 0; i < importTypes.size; ++i)
         {
             auto moduleName = wasm_importtype_module(importTypes.data[i]);
@@ -1305,7 +1323,7 @@ namespace hera
 
             if (hostFunctions.count(functionName))
             {
-                wasm_func_t *host_func = wasm_func_new_with_env(store, hostFunctions[functionName].functionType.get(), hostFunctions[functionName].function, env, NULL);
+                wasm_func_t *host_func = wasm_func_new_with_env(store, hostFunctions[functionName].functionType.get(), hostFunctions[functionName].function, (void *)hostContext.get(), NULL);
                 if (!host_func)
                 {
                     functions.reset();
@@ -1395,6 +1413,7 @@ namespace hera
             delete p;
         });
         wasmInstance->imports = imports;
+        wasmInstance->hostContext = hostContext;
         wasmInstance->import_object = import_object;
         wasm_instance_exports(instance, &wasmInstance->exports);
         wasm_exporttype_vec_t exportTypes;
@@ -1441,7 +1460,7 @@ namespace hera
         return wasmInstance;
     }
 
-    shared_ptr<WasmInstanceContainer> getWasmInstanceContainer(const string &address, bytes_view code, void *env)
+    shared_ptr<WasmInstanceContainer> getWasmInstanceContainer(const string &address, bytes_view code)
     {
 #ifdef PERF_TIME
         auto end = system_clock::now();
@@ -1477,7 +1496,7 @@ namespace hera
         //         auto store = wasm_store_new(wasmModule->engine);
         //         auto store_holder = shared_ptr<wasm_store_t>(store, [](auto p) { wasm_store_delete(p); });
         // #endif
-        shared_ptr<WasmInstance> wasmInstance = createWasmInstance(store, module, env);
+        shared_ptr<WasmInstance> wasmInstance = createWasmInstance(store, module);
         auto p = shared_ptr<WasmInstanceContainer>(new WasmInstanceContainer{engine, module, {wasmInstance}}, [](auto p) {
             if (p->module)
             {
@@ -1510,14 +1529,17 @@ namespace hera
                 {
                     if (i->idle.exchange(false))
                     {
+                        i->usedCount.fetch_add(1);
+                        i->hostContext->env = env;
                         return i;
                     }
                 }
             }
         }
         wasm_store_t *store = wasm_store_new(container->engine);
-        shared_ptr<WasmInstance> wasmInstance = createWasmInstance(store, container->module, env);
+        shared_ptr<WasmInstance> wasmInstance = createWasmInstance(store, container->module);
         wasmInstance->idle.store(false);
+        wasmInstance->hostContext->env = env;
         std::unique_lock lock(container->instancesMutex);
         container->instances.push_back(wasmInstance);
         return wasmInstance;
@@ -1538,12 +1560,12 @@ namespace hera
         auto start = system_clock::now();
 #endif
         string myAddress((const char *)msg.destination.bytes, 20);
-        shared_ptr<WasmInstanceContainer> containter = getWasmInstanceContainer(myAddress, code, (void *)&interface);
+        shared_ptr<WasmInstanceContainer> containter = getWasmInstanceContainer(myAddress, code);
 #ifdef PERF_TIME
         auto start1 = system_clock::now();
 #endif
         auto wasmInstance = getInstanceFromContainer(containter, (void *)&interface);
-        auto instanceHolder = InstanceHolder{wasmInstance};
+        auto instanceHolder = InstanceHolder{wasmInstance, containter};
 #ifdef PERF_TIME
         auto end = system_clock::now();
         cout << "wasm new module used(us)  : " << duration_cast<microseconds>(start1 - start).count() << endl
