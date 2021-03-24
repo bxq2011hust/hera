@@ -96,11 +96,16 @@ namespace hera
             : functions(_functions), instance(_instance) {}
         shared_ptr<vector<shared_ptr<wasm_func_t> > > functions = nullptr;
         wasm_instance_t *instance = nullptr;
+        wasm_func_t *hashTypeFunc = nullptr;
+        wasm_func_t *deployFunc = nullptr;
+        wasm_func_t *mainFunc = nullptr;
+        wasm_memory_t *memory = nullptr;
+        wasm_extern_vec_t exports;
         atomic_bool idle = {true};
     };
     struct InstanceHolder
     {
-        ~InstanceHolder() { instance->idle.store(false); }
+        ~InstanceHolder() { instance->idle.store(true); }
         shared_ptr<WasmInstance> instance;
     };
     struct WasmInstanceContainer
@@ -1198,7 +1203,7 @@ namespace hera
         wasm_engine_delete(engine);
     }
 
-    wasm_extern_t *findExternByName(const string &targetName, const wasm_extern_vec_t exports, const wasm_exporttype_vec_t &exportTypes)
+    wasm_extern_t *findExternByName(const string &targetName, const wasm_extern_vec_t &exports, const wasm_exporttype_vec_t &exportTypes)
     {
         int index = -1;
         for (size_t i = 0; i < exportTypes.size; ++i)
@@ -1348,7 +1353,76 @@ namespace hera
             HERA_DEBUG << "Create wasm instance failed, " << message << "...\n";
             ensureCondition(false, ContractValidationFailure, "Error instantiating wasm");
         }
-        return make_shared<WasmInstance>(functions, instance);
+        auto wasmInstance = shared_ptr<WasmInstance>(new WasmInstance(functions, instance),[](auto p){
+#if HERA_WASMER
+            if (p->memory)
+            {
+                wasm_memory_delete(p->memory);
+                p->memory = nullptr;
+            }
+            if (p->hashTypeFunc)
+            {
+                wasm_func_delete(p->hashTypeFunc);
+                p->hashTypeFunc = nullptr;
+            }
+            if (p->deployFunc)
+            {
+                wasm_func_delete(p->deployFunc);
+                p->deployFunc = nullptr;
+            }
+            if (p->mainFunc)
+            {
+                wasm_func_delete(p->mainFunc);
+                p->mainFunc = nullptr;
+            }
+#endif
+            wasm_extern_vec_delete(&p->exports);
+            wasm_instance_delete(p->instance);
+            p->functions.reset();
+            delete p;
+        });
+        wasm_instance_exports(instance, &wasmInstance->exports);
+        wasm_exporttype_vec_t exportTypes;
+        wasm_module_exports(module, &exportTypes);
+        // get memory TODO: remove findExternByName
+        auto memoryExtern = findExternByName("memory", wasmInstance->exports, exportTypes);
+        if (!memoryExtern)
+        {
+            ensureCondition(false, InvalidMemoryAccess, string("get memory from wasm failed"));
+        }
+        auto memory = wasm_extern_as_memory(memoryExtern);
+        HERA_DEBUG << "wasm memory pages is " << wasm_memory_size(memory) << "\n";
+        if (wasm_memory_size(memory) == 0)
+        {
+#if HERA_WASMER
+            wasm_memory_delete(memory);
+#endif
+            wasm_exporttype_vec_delete(&exportTypes);
+            ensureCondition(false, InvalidMemoryAccess, string("wasm memory pages must greater than 1"));
+        }
+        wasmInstance->memory = memory;
+        auto hashTypeFuncExtern = findExternByName("hash_type", wasmInstance->exports, exportTypes);
+        if (!hashTypeFuncExtern)
+        {
+            wasm_exporttype_vec_delete(&exportTypes);
+            ensureCondition(false, ContractValidationFailure, "get hash function failed");
+        }
+        wasmInstance->hashTypeFunc = wasm_extern_as_func(hashTypeFuncExtern);
+        auto deployFuncExtern = findExternByName("deploy", wasmInstance->exports, exportTypes);
+        if (!deployFuncExtern)
+        {
+            wasm_exporttype_vec_delete(&exportTypes);
+            ensureCondition(false, ContractValidationFailure, "can't find deploy");
+        }
+        wasmInstance->deployFunc = wasm_extern_as_func(deployFuncExtern);
+        auto mainFuncExtern = findExternByName("main", wasmInstance->exports, exportTypes);
+        if (!mainFuncExtern)
+        {
+            wasm_exporttype_vec_delete(&exportTypes);
+            ensureCondition(false, ContractValidationFailure, "can't main deploy");
+        }
+        wasmInstance->mainFunc = wasm_extern_as_func(mainFuncExtern);
+        return wasmInstance;
     }
 
     shared_ptr<WasmInstanceContainer> getWasmInstanceContainer(const string &address, bytes_view code, void *env)
@@ -1389,11 +1463,6 @@ namespace hera
         // #endif
         shared_ptr<WasmInstance> wasmInstance = createWasmInstance(store, module, env);
         auto p = shared_ptr<WasmInstanceContainer>(new WasmInstanceContainer{engine, store, module, {wasmInstance}}, [](auto p) {
-            for (auto i : p->instances)
-            {
-                wasm_instance_delete(i->instance);
-                i->functions.reset();
-            }
             if (p->module)
             {
                 wasm_module_delete(p->module);
@@ -1411,6 +1480,7 @@ namespace hera
             }
             delete p;
         });
+
 #ifdef PERF_TIME
         auto end2 = system_clock::now();
         cout << "wasm instance used(us)    : " << duration_cast<microseconds>(end2 - end).count() << endl;
@@ -1457,41 +1527,19 @@ namespace hera
 #endif
         string myAddress((const char *)msg.destination.bytes, 20);
         shared_ptr<WasmInstanceContainer> containter = getWasmInstanceContainer(myAddress, code, (void *)&interface);
+#ifdef PERF_TIME
+        auto start1 = system_clock::now();
+#endif
         auto wasmInstance = getInstanceFromContainer(containter, (void *)&interface);
         auto instanceHolder = InstanceHolder{wasmInstance};
-        auto module = containter->module;
-        auto instance = wasmInstance->instance;
-        auto store = containter->store;
 #ifdef PERF_TIME
         auto end = system_clock::now();
-        cout << "wasm new module used(us)  : " << duration_cast<microseconds>(end - start).count() << endl;
+        cout << "wasm new module used(us)  : " << duration_cast<microseconds>(start1 - start).count() << endl
+             << "wasm get instance used(us): " << duration_cast<microseconds>(end - start1).count() << endl;
 #endif
-        wasm_extern_vec_t exports;
-        wasm_instance_exports(instance, &exports);
 
-        wasm_exporttype_vec_t exportTypes;
-        wasm_module_exports(module, &exportTypes);
-        // get memory
-        auto memoryExtern = findExternByName("memory", exports, exportTypes);
-        if (!memoryExtern)
-        {
-            wasm_exporttype_vec_delete(&exportTypes);
-            wasm_extern_vec_delete(&exports);
-            ensureCondition(false, InvalidMemoryAccess, string("get memory from wasm failed"));
-        }
-        auto memory = wasm_extern_as_memory(memoryExtern);
-        HERA_DEBUG << "wasm memory pages is " << wasm_memory_size(memory) << "\n";
-        if (wasm_memory_size(memory) == 0)
-        {
-#if HERA_WASMER
-            wasm_memory_delete(memory);
-#endif
-            wasm_exporttype_vec_delete(&exportTypes);
-            wasm_extern_vec_delete(&exports);
-            ensureCondition(false, InvalidMemoryAccess, string("wasm memory pages must greater than 1"));
-        }
-        interface.setWasmStore(store);
-        interface.setWasmMemory(memory);
+        interface.setWasmStore(containter->store);
+        interface.setWasmMemory(wasmInstance->memory);
 
         // Call the Wasm function
         const char *callName = "main";
@@ -1504,46 +1552,22 @@ namespace hera
                 useSM3Hash = 1;
             }
             HERA_DEBUG << "host hash algorithm is " << (useSM3Hash ? "sm3" : "keccak256") << ", Get hash type of contract...\n";
-            auto hashTypeFuncExtern = findExternByName("hash_type", exports, exportTypes);
-            if (!hashTypeFuncExtern)
-            {
-#if HERA_WASMER
-                wasm_memory_delete(memory);
-#endif
-                wasm_exporttype_vec_delete(&exportTypes);
-                wasm_extern_vec_delete(&exports);
-                ensureCondition(false, ContractValidationFailure, "get hash function failed");
-            }
-            auto hashTypeFunc = wasm_extern_as_func(hashTypeFuncExtern);
+
             // call hash_type
             wasm_val_t args_val[] = {};
             wasm_val_t results_val[1] = {WASM_INIT_VAL};
             wasm_val_vec_t args = WASM_ARRAY_VEC(args_val);
             wasm_val_vec_t results = WASM_ARRAY_VEC(results_val);
-            auto trap = wasm_func_call(hashTypeFunc, &args, &results);
-#if HERA_WASMER
-            wasm_func_delete(hashTypeFunc);
-#endif
+            auto trap = wasm_func_call(wasmInstance->hashTypeFunc, &args, &results);
             if (trap)
             { //call hash_type failed
-
                 auto message = processTrap(trap);
-#if HERA_WASMER
-                wasm_memory_delete(memory);
-#endif
-                wasm_exporttype_vec_delete(&exportTypes);
-                wasm_extern_vec_delete(&exports);
                 ensureCondition(false, ContractValidationFailure, "call hash_type failed, " + message);
             }
             HERA_DEBUG << "Contract hash algorithm is " << (results_val[0].of.i32 ? "sm3\n" : "keccak256\n");
 
             if (results_val[0].of.i32 != useSM3Hash)
             { // 0:keccak256, 1:sm3
-#if HERA_WASMER
-                wasm_memory_delete(memory);
-#endif
-                wasm_exporttype_vec_delete(&exportTypes);
-                wasm_extern_vec_delete(&exports);
                 ensureCondition(false, ContractValidationFailure, "hash type mismatch");
             }
         }
@@ -1554,17 +1578,11 @@ namespace hera
         try
         {
             HERA_DEBUG << "Executing contract " << callName << "...\n";
-            auto funcExtern = findExternByName(callName, exports, exportTypes);
-            if (!funcExtern)
+            auto func = wasmInstance->mainFunc;
+            if (callName == string("deploy"))
             {
-#if HERA_WASMER
-                wasm_memory_delete(memory);
-#endif
-                wasm_exporttype_vec_delete(&exportTypes);
-                wasm_extern_vec_delete(&exports);
-                ensureCondition(false, ContractValidationFailure, "can't find main/deploy");
+                func = wasmInstance->deployFunc;
             }
-            auto func = wasm_extern_as_func(funcExtern);
 #ifdef PERF_TIME
             end4 = system_clock::now();
             cout << "wasm get exports used(us) : " << duration_cast<microseconds>(end4 - end).count() << endl;
@@ -1575,9 +1593,6 @@ namespace hera
             wasm_val_vec_t args = WASM_ARRAY_VEC(args_val);
             wasm_val_vec_t results = WASM_ARRAY_VEC(results_val);
             trap = wasm_func_call(func, &args, &results);
-#if HERA_WASMER
-            wasm_func_delete(func);
-#endif
         }
         catch (EndExecution const &)
         {
@@ -1592,11 +1607,6 @@ namespace hera
         {
             result.returnValue = code;
         }
-#if HERA_WASMER
-        wasm_memory_delete(memory);
-#endif
-        wasm_exporttype_vec_delete(&exportTypes);
-        wasm_extern_vec_delete(&exports);
         executionFinished();
 #ifdef PERF_TIME
         auto end6 = system_clock::now();
