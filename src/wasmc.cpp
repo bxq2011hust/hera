@@ -92,15 +92,18 @@ namespace hera
     };
     struct WasmInstance
     {
-        WasmInstance(shared_ptr<vector<shared_ptr<wasm_func_t> > > _functions, wasm_instance_t *_instance)
-            : functions(_functions), instance(_instance) {}
+        WasmInstance(shared_ptr<vector<shared_ptr<wasm_func_t> > > _functions, wasm_instance_t *_instance, wasm_store_t *_store)
+            : functions(_functions), instance(_instance), store(_store) {}
         shared_ptr<vector<shared_ptr<wasm_func_t> > > functions = nullptr;
         wasm_instance_t *instance = nullptr;
+        wasm_store_t *store = nullptr;
         wasm_func_t *hashTypeFunc = nullptr;
         wasm_func_t *deployFunc = nullptr;
         wasm_func_t *mainFunc = nullptr;
         wasm_memory_t *memory = nullptr;
         wasm_extern_vec_t exports;
+        shared_ptr<vector<wasm_extern_t *>> imports = nullptr;
+        shared_ptr<wasm_extern_vec_t> import_object = nullptr;
         atomic_bool idle = {true};
     };
     struct InstanceHolder
@@ -111,7 +114,6 @@ namespace hera
     struct WasmInstanceContainer
     {
         wasm_engine_t *engine = nullptr;
-        wasm_store_t *store = nullptr;
         wasm_module_t *module = nullptr;
         vector<shared_ptr<WasmInstance> > instances;
         std::shared_mutex instancesMutex;
@@ -1276,8 +1278,8 @@ namespace hera
 #endif
         wasm_importtype_vec_t importTypes;
         wasm_module_imports(module, &importTypes);
-        vector<wasm_extern_t *> imports;
-        imports.reserve(importTypes.size);
+        auto imports = make_shared<vector<wasm_extern_t *>>();
+        imports->reserve(importTypes.size);
         auto functions = make_shared<vector<shared_ptr<wasm_func_t> > >();
         functions->reserve(importTypes.size);
         for (size_t i = 0; i < importTypes.size; ++i)
@@ -1293,6 +1295,7 @@ namespace hera
 #endif
             )
             {
+                wasm_store_delete(store);
                 wasm_importtype_vec_delete(&importTypes);
                 ensureCondition(false, ContractValidationFailure, "Import from invalid namespace.");
                 break;
@@ -1306,16 +1309,18 @@ namespace hera
                 if (!host_func)
                 {
                     functions.reset();
+                    wasm_store_delete(store);
                     wasm_importtype_vec_delete(&importTypes);
                     ensureCondition(false, ContractValidationFailure, functionName + " import failed.");
                 }
-                imports.push_back(wasm_func_as_extern(host_func));
+                imports->push_back(wasm_func_as_extern(host_func));
                 functions->push_back(shared_ptr<wasm_func_t>(host_func, [](auto p) { wasm_func_delete(p); }));
                 // HERA_DEBUG << i << " " << string(moduleName->data, moduleName->size) << "::" << functionName << " imported\n";
             }
             else
             {
                 functions.reset();
+                wasm_store_delete(store);
                 wasm_importtype_vec_delete(&importTypes);
                 ensureCondition(false, ContractValidationFailure, functionName + " is not a supported function");
             }
@@ -1326,14 +1331,16 @@ namespace hera
         cout << "wasm new imports used(us) : " << duration_cast<microseconds>(end2 - end).count() << endl;
 #endif
         HERA_DEBUG << "Create wasm instance...\n";
-        wasm_extern_vec_t import_object{imports.size(), imports.data()};
+        auto import_object = make_shared<wasm_extern_vec_t>();
+        import_object->size = imports->size();
+        import_object->data = imports->data();
         // Assert the Wasm instantion completed
         own wasm_trap_t *trap = NULL;
         wasm_instance_t *instance = NULL;
 #if HERA_WASMER
-        instance = wasm_instance_new(store, module, &import_object, &trap);
+        instance = wasm_instance_new(store, module, import_object.get(), &trap);
 #else
-        wasmtime_error_t *error = wasmtime_instance_new(store, module, &import_object, &instance, &trap);
+        wasmtime_error_t *error = wasmtime_instance_new(store, module, import_object.get(), &instance, &trap);
 #endif
         if (!instance)
         {
@@ -1351,9 +1358,10 @@ namespace hera
 #endif
             }
             HERA_DEBUG << "Create wasm instance failed, " << message << "...\n";
+            wasm_store_delete(store);
             ensureCondition(false, ContractValidationFailure, "Error instantiating wasm");
         }
-        auto wasmInstance = shared_ptr<WasmInstance>(new WasmInstance(functions, instance),[](auto p){
+        auto wasmInstance = shared_ptr<WasmInstance>(new WasmInstance(functions, instance, store), [](auto p) {
 #if HERA_WASMER
             if (p->memory)
             {
@@ -1376,11 +1384,18 @@ namespace hera
                 p->mainFunc = nullptr;
             }
 #endif
+            if (p->store)
+            {
+                wasm_store_delete(p->store);
+                p->store = nullptr;
+            }
             wasm_extern_vec_delete(&p->exports);
             wasm_instance_delete(p->instance);
             p->functions.reset();
             delete p;
         });
+        wasmInstance->imports = imports;
+        wasmInstance->import_object = import_object;
         wasm_instance_exports(instance, &wasmInstance->exports);
         wasm_exporttype_vec_t exportTypes;
         wasm_module_exports(module, &exportTypes);
@@ -1422,6 +1437,7 @@ namespace hera
             ensureCondition(false, ContractValidationFailure, "can't main deploy");
         }
         wasmInstance->mainFunc = wasm_extern_as_func(mainFuncExtern);
+        wasm_exporttype_vec_delete(&exportTypes);
         return wasmInstance;
     }
 
@@ -1462,16 +1478,11 @@ namespace hera
         //         auto store_holder = shared_ptr<wasm_store_t>(store, [](auto p) { wasm_store_delete(p); });
         // #endif
         shared_ptr<WasmInstance> wasmInstance = createWasmInstance(store, module, env);
-        auto p = shared_ptr<WasmInstanceContainer>(new WasmInstanceContainer{engine, store, module, {wasmInstance}}, [](auto p) {
+        auto p = shared_ptr<WasmInstanceContainer>(new WasmInstanceContainer{engine, module, {wasmInstance}}, [](auto p) {
             if (p->module)
             {
                 wasm_module_delete(p->module);
                 p->module = nullptr;
-            }
-            if (p->store)
-            {
-                wasm_store_delete(p->store);
-                p->store = nullptr;
             }
             if (p->engine)
             {
@@ -1504,7 +1515,8 @@ namespace hera
                 }
             }
         }
-        shared_ptr<WasmInstance> wasmInstance = createWasmInstance(container->store, container->module, env);
+        wasm_store_t *store = wasm_store_new(container->engine);
+        shared_ptr<WasmInstance> wasmInstance = createWasmInstance(store, container->module, env);
         wasmInstance->idle.store(false);
         std::unique_lock lock(container->instancesMutex);
         container->instances.push_back(wasmInstance);
@@ -1538,7 +1550,7 @@ namespace hera
              << "wasm get instance used(us): " << duration_cast<microseconds>(end - start1).count() << endl;
 #endif
 
-        interface.setWasmStore(containter->store);
+        interface.setWasmStore(wasmInstance->store);
         interface.setWasmMemory(wasmInstance->memory);
 
         // Call the Wasm function
@@ -1608,10 +1620,7 @@ namespace hera
             result.returnValue = code;
         }
         executionFinished();
-#ifdef PERF_TIME
-        auto end6 = system_clock::now();
-        cout << "wasm free exports used(us): " << duration_cast<microseconds>(end6 - end5).count() << endl;
-#endif
+
         if (trap)
         { //call main/deploy failed, process trap, print frame and trace
             auto errorMessage = processTrap(trap);
@@ -1666,8 +1675,8 @@ namespace hera
         }
 #endif
 #ifdef PERF_TIME
-        auto end7 = system_clock::now();
-        cout << "wasm parse trap used(us)  : " << duration_cast<microseconds>(end7 - end6).count() << ", total = " << duration_cast<microseconds>(end7 - start).count() << endl;
+        auto end6 = system_clock::now();
+        cout << "wasm parse trap used(us)  : " << duration_cast<microseconds>(end6 - end5).count() << ", total = " << duration_cast<microseconds>(end6 - start).count() << endl;
 #endif
         return result;
     };
